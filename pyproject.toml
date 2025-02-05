@@ -1,0 +1,72 @@
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "pythonchik"
+version = "0.1.0"
+description = "A Python utility for processing JSON files and images"
+packages = [{include = "pythonchik"}]
+
+[tool.poetry.dependencies]
+python = ">=3.12"
+pillow = "*"
+matplotlib = "*"
+
+[tool.poetry.group.dev.dependencies]
+black = "^24.4.0"
+mypy = "^1.9.0"
+pre-commit = "^3.7.0"
+pytest = "^7.2"
+pytest-cov = "^4.0.0"
+ruff = "^0.4.0"
+factory-boy = "^3.3.0"
+dirty-equals = "^0.7.1.post0"
+pyinstaller = {version = "^6.11.1", python = ">=3.12,<3.14"}
+
+[tool.mypy]
+allow_subclassing_any = true
+allow_untyped_calls = true
+allow_untyped_decorators = true
+ignore_missing_imports = true
+implicit_reexport = true
+pretty = true
+show_error_codes = true
+strict = true
+warn_return_any = false
+
+[tool.pytest.ini_options]
+python_files = "test_*"
+python_functions = "test_*"
+python_classes = "TestSuite*"
+addopts = "-p no:cacheprovider"
+
+[tool.coverage.report]
+skip_empty = true
+
+[tool.coverage.run]
+branch = true
+source = ["pythonchik"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+lint.select = [
+  "BLE",
+  "C90",
+  "E",
+  "F",
+  "G",
+  "I",
+  "ICN",
+  "ISC",
+  "PLE",
+  "Q",
+  "RUF006",
+  "RUF100",
+  "T10",
+  "T20",
+  "TID",
+  "UP",
+  "W",
+]

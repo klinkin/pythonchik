@@ -1,0 +1,35 @@
+{
+  "catalogs": [
+    {
+      "target_regions": ["Moscow Region"],
+      "target_shops": ["Shop 1"],
+      "offers": ["offer1", "offer2"]
+    },
+    {
+      "target_regions": ["Saint Petersburg"],
+      "target_shops": ["Shop 2"],
+      "offers": ["offer3"]
+    }
+  ],
+  "offers": [
+    {
+      "id": "offer1",
+      "description": "Test Product 1",
+      "barcode": "1234567890",
+      "price_new": 100
+    },
+    {
+      "id": "offer2",
+      "description": "Test Product 1",
+      "barcode": "0987654321",
+      "price_new": 150
+    },
+    {
+      "id": "offer3",
+      "description": "Test Product 2",
+      "barcode": "5432109876",
+      "price_new": 200
+    }
+  ],
+  "target_shops_coords": ["Shop 1"]
+}
