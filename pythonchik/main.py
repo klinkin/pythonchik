@@ -1,53 +1,51 @@
 import json
-import os
 import shutil
 import tkinter as tk
+import tkinter.ttk as ttk
 import zipfile
 from pathlib import Path
 from tkinter import filedialog as fd
 from tkinter import messagebox as mb
-from typing import Any, Dict, List, Optional
-import csv
+from typing import List
+
 import matplotlib.pyplot as plt
 from PIL import Image
 
-
-class JsonProcessor:
-    @staticmethod
-    def load_json_file(file_path: str) -> Dict[str, Any]:
-        try:
-            with open(file_path, encoding="utf-8") as f:
-                return json.load(f)
-        except json.JSONDecodeError:
-            mb.showerror("Error", "Invalid JSON file format")
-            return {}
-        except FileNotFoundError:
-            mb.showerror("Error", f"File not found: {file_path}")
-            return {}
-
-
-class ImageProcessor:
-    @staticmethod
-    def resize_image(image_path: str, output_dir: str) -> None:
-        try:
-            with Image.open(image_path) as im:
-                width, height = im.size
-                new_size = (width // 2, height // 2)
-                resized_image = im.resize(new_size)
-                output_path = Path(output_dir) / f"{Path(image_path).stem}.png"
-                resized_image.save(output_path, optimize=True, quality=50)
-        except Exception as e:
-            mb.showerror("Error", f"Failed to process image {image_path}: {str(e)}")
+from pythonchik import config
+from pythonchik.image_processor import ImageProcessor
+from pythonchik.services import (
+    analyze_price_differences,
+    check_coordinates_match,
+    count_unique_offers,
+    create_test_json,
+    extract_addresses,
+    extract_barcodes,
+    load_json_file,
+    save_to_csv,
+)
+from pythonchik.ui import BaseWindow, FileDialog, ProgressBar
 
 
-class App(tk.Tk):
+class App(tk.Tk, BaseWindow):
+    """Главное окно приложения.
+
+    Предоставляет графический интерфейс для выполнения различных операций
+    с JSON файлами и изображениями.
+    """
+
     def __init__(self):
-        super().__init__()
-        self.title("Меню")
-        self.json_processor = JsonProcessor()
+        tk.Tk.__init__(self)
+        BaseWindow.__init__(self)
+        self.title("Главное меню")
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.setup_ui()
+        self.progress_bar = ProgressBar(self)
 
     def setup_ui(self) -> None:
+        """Настройка пользовательского интерфейса."""
+        self.main_frame = tk.Frame(self)
+        self.main_frame.pack(expand=True, fill=tk.BOTH, padx=10, pady=10)
+
         buttons = [
             ("1) Собрать адреса из json", self.show_address),
             ("2) Сжать картинки в 2 раза", self.show_image),
@@ -59,248 +57,228 @@ class App(tk.Tk):
             ("8) Сравнить цены", self.compare_prices),
         ]
 
-        button_opts = {"padx": 60, "pady": 25, "expand": True, "fill": tk.BOTH}
+        button_opts = {
+            "padx": config.BUTTON_PADX,
+            "pady": config.BUTTON_PADY,
+            "expand": True,
+            "fill": tk.BOTH,
+        }
         for text, command in buttons:
-            tk.Button(self, text=text, command=command).pack(**button_opts)
+            tk.Button(self.main_frame, text=text, command=command).pack(**button_opts)
 
-    def get_json_files(self) -> List[str]:
-        files = fd.askopenfilenames(filetypes=[("JSON files", "*.json")])
-        if not files:
-            mb.showinfo("Информация", "Выберите файл(ы) JSON")
-        return list(files)
+    def on_close(self):
+        """Обработчик закрытия окна."""
+        if mb.askokcancel("Выход", "Вы действительно хотите выйти?"):
+            self.destroy()
 
-    def get_image_files(self) -> List[str]:
-        files = fd.askopenfilenames(
-            filetypes=[("Image files", "*.png;*.jpg;*.webp;*.tif")]
-        )
+    def _process_json_files(self, processor_func):
+        """Общий метод для обработки JSON файлов.
+
+        Args:
+            processor_func: Функция для обработки данных из JSON
+        """
+        files = FileDialog.get_json_files()
         if not files:
-            mb.showinfo("Информация", "Выберите изображение(я)")
-        return list(files)
+            return None, None
+
+        results = []
+        for file_path in files:
+            data = load_json_file(file_path)
+            result = processor_func(data)
+            if isinstance(result, (list, tuple)):
+                results.extend(result)
+            else:
+                results.append(result)
+        return results, files
 
     def show_address(self) -> None:
-        files = self.get_json_files()
-        if not files:
-            return
+        """Обработка адресов из JSON файлов."""
+        with self.cleanup_context():
+            addresses, files = self._process_json_files(extract_addresses)
+            if not addresses:
+                return
 
-        addresses = []
-        for file_path in files:
-            data = self.json_processor.load_json_file(file_path)
-            for catalog in data.get("catalogs", []):
-                try:
-                    addresses.append(
-                        catalog.get("target_regions", [catalog["target_shops"][0]])[0]
-                    )
-                except (KeyError, IndexError):
-                    continue
-
-        if addresses:
-            output_path = f"{Path(files[-1]).stem}_addresses.csv"
-            with open(output_path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(["Adress"])
-                writer.writerows([[addr] for addr in addresses])
-            mb.showinfo("Информация", "Готово!")
-        self.quit()
+            if addresses:
+                output_path = f"{Path(files[-1]).stem}{config.ADDRESSES_SUFFIX}.csv"
+                save_to_csv(addresses, ["Адрес"], output_path)
+                mb.showinfo("Информация", "Готово!")
 
     def show_image(self) -> None:
-        files = self.get_image_files()
-        if not files:
-            return
+        """Обработка и сжатие изображений."""
+        with self.cleanup_context():
+            files = FileDialog.get_image_files()
+            if not files:
+                return
 
-        output_dir = Path("Картинки Сжатые")
-        output_dir.mkdir(exist_ok=True)
+            output_dir = Path(config.COMPRESSED_IMAGES_DIR)
+            output_dir.mkdir(exist_ok=True)
 
-        for file_path in files:
-            ImageProcessor.resize_image(file_path, str(output_dir))
+            total_files = len(files)
+            processed_files = []
+            for i, file_path in enumerate(files, 1):
+                progress = (i - 1) / total_files * 100
+                self.progress_bar.update(
+                    progress, f"Обработка файла {i} из {total_files}..."
+                )
+                try:
+                    ImageProcessor.resize_image(
+                        file_path, str(output_dir), self.progress_bar.update
+                    )
+                    processed_files.append(output_dir / f"{Path(file_path).stem}.png")
+                except Exception as e:
+                    mb.showerror("Ошибка", str(e))
 
-        # Create zip archive
-        with zipfile.ZipFile(
-            "Картинки Сжатые.zip", "w", compression=zipfile.ZIP_DEFLATED
-        ) as zf:
-            for file_path in output_dir.glob("*"):
-                zf.write(file_path, file_path.name)
+            self.progress_bar.update(90, "Создание архива...")
+            with zipfile.ZipFile(
+                config.COMPRESSED_IMAGES_ARCHIVE, "w", compression=zipfile.ZIP_DEFLATED
+            ) as zf:
+                for file_path in processed_files:
+                    if file_path.exists():
+                        zf.write(file_path, file_path.name)
 
-        shutil.rmtree(output_dir)
-        mb.showinfo("Информация", "Готово!")
-        self.quit()
+            self.progress_bar.update(95, "Очистка временных файлов...")
+            shutil.rmtree(output_dir)
+
+            self.progress_bar.update(100, "Готово!")
+            mb.showinfo("Информация", "Готово!")
 
     def check_coordinates(self) -> None:
-        files = self.get_json_files()
-        if not files:
-            return
+        """Проверка соответствия адресов и координат."""
+        with self.cleanup_context():
+            files = FileDialog.get_json_files()
+            if not files:
+                return
 
-        segment = []
-        koor = []
-        nkoor = []
-        count = 0
+            nkoor = []
+            for file_path in files:
+                data = load_json_file(file_path)
+                no_coords, total_catalogs, total_coords, matched_count = (
+                    check_coordinates_match(data)
+                )
+                nkoor.extend(no_coords)
 
-        for file_path in files:
-            data = self.json_processor.load_json_file(file_path)
-            for catalog in data.get("catalogs", []):
-                segment.append(catalog["target_shops"][0])
-            for shop in data.get("target_shops_coords", []):
-                koor.append(shop)
+            info_message = (
+                f"Всего каталогов - {total_catalogs}\n"
+                f"Всего координат - {total_coords}\n"
+                f"Для адресов нашлись координаты - {matched_count}\n"
+                f"Для этих адресов нет координат:\n"
+                f"{', '.join(nkoor)}"
+            )
+            mb.showinfo("Информация", info_message)
 
-        for shop in segment:
-            if shop not in koor:
-                nkoor.append(str(shop))
-            else:
-                count += 1
-
-        info_message = (
-            f"Всего каталогов - {len(segment)}\n"
-            f"Всего координат - {len(koor)}\n"
-            f"Для адресов нашлись координаты - {count}\n"
-            f"Для этих адресов нет координат:\n"
-            f"{', '.join(nkoor)}"
-        )
-        mb.showinfo("Информация", info_message)
-
-        if nkoor:
-            output_path = f"{Path(files[-1]).stem}_no_coordinates.csv"
-            with open(output_path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(["Address_no_coordinates"])
-                writer.writerows([[addr] for addr in nkoor])
-
-        self.quit()
+            if nkoor:
+                output_path = (
+                    f"{Path(files[-1]).stem}{config.NO_COORDINATES_SUFFIX}.csv"
+                )
+                save_to_csv(nkoor, ["Адреса без координат"], output_path)
 
     def extract_barcodes(self) -> None:
-        files = self.get_json_files()
-        if not files:
-            return
+        """Извлечение штрих-кодов из JSON файлов."""
+        with self.cleanup_context():
+            barcode, files = self._process_json_files(extract_barcodes)
+            if not barcode:
+                return
 
-        barcode = []
-        for file_path in files:
-            data = self.json_processor.load_json_file(file_path)
-            for offer in data.get("offers", []):
-                try:
-                    if offer["barcode"] not in barcode and len(offer["barcode"]) > 5:
-                        barcode.append(offer["barcode"])
-                except KeyError:
-                    continue
-
-        if barcode:
-            output_path = f"{Path(files[-1]).stem}_barcode.csv"
-            with open(output_path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(["barcode"])
-                writer.writerows([[code] for code in barcode])
-            mb.showinfo("Информация", "Готово!")
-        self.quit()
+            if barcode:
+                output_path = f"{Path(files[-1]).stem}{config.BARCODE_SUFFIX}.csv"
+                save_to_csv(barcode, ["barcode"], output_path)
+                mb.showinfo("Информация", "Готово!")
 
     def count_unique_offers(self) -> None:
-        files = self.get_json_files()
-        if not files:
-            return
+        """Подсчет уникальных предложений."""
+        with self.cleanup_context():
+            result, files = self._process_json_files(count_unique_offers)
+            if not result:
+                return
 
-        offers = []
-        count = 0
-        for file_path in files:
-            data = self.json_processor.load_json_file(file_path)
-            for offer in data.get("offers", []):
-                count += 1
-                if offer["description"] not in offers:
-                    offers.append(offer["description"])
+            total_count = sum(r[0] for r in result)
+            offers = []
+            for file_path in files:
+                data = load_json_file(file_path)
+                offers.extend(
+                    [offer["description"] for offer in data.get("offers", [])]
+                )
 
-        mb.showinfo(
-            "Информация", f"Всего офферов - {count}\nУникальных офферов - {len(offers)}"
-        )
-        self.quit()
+            mb.showinfo(
+                "Информация",
+                f"Всего офферов - {count}\nУникальных офферов - {len(offers)}",
+            )
 
     def write_test_json(self) -> None:
-        files = self.get_json_files()
-        if len(files) != 1:
-            mb.showinfo("Информация", "Выбери один файл json")
-            return
+        """Создание тестового JSON файла."""
+        with self.cleanup_context():
+            files = FileDialog.get_json_files()
+            if len(files) != 1:
+                mb.showinfo("Информация", "Выберите один файл json")
+                return
 
-        data = self.json_processor.load_json_file(files[0])
-        json_file = {"catalogs": data.get("catalogs", [])}
+            data = load_json_file(files[0])
+            json_file = create_test_json(data)
 
-        for catalog in json_file["catalogs"]:
-            catalog["offers"] = [catalog["offers"][0]]
+            output_path = f"{Path(files[0]).stem}{config.TEST_JSON_SUFFIX}.json"
+            with open(output_path, "w") as outfile:
+                json.dump(json_file, outfile)
 
-        koor = []
-        for offer in data.get("offers", []):
-            for catalog in json_file["catalogs"]:
-                if offer["id"] == catalog["offers"][0]:
-                    koor.append(offer)
-
-        json_file["offers"] = koor
-        json_file["target_shops_coords"] = data.get("target_shops_coords", [])
-
-        output_path = f"{Path(files[0]).stem}_test.json"
-        with open(output_path, "w") as outfile:
-            json.dump(json_file, outfile)
-
-        mb.showinfo("Информация", "Готово!")
-        self.quit()
+            mb.showinfo("Информация", "Готово!")
 
     def convert_image_format(self) -> None:
-        files = self.get_image_files()
-        if not files:
-            return
+        """Конвертация форматов изображений."""
+        with self.cleanup_context():
+            files = FileDialog.get_image_files()
+            if not files:
+                return
 
-        output_dir = Path("Картинки формат")
-        output_dir.mkdir(exist_ok=True)
+            output_dir = Path(config.FORMAT_CONVERTED_IMAGES_DIR)
+            output_dir.mkdir(exist_ok=True)
 
-        for file_path in files:
-            try:
-                with Image.open(file_path) as im:
-                    output_path = output_dir / f"{Path(file_path).stem}.png"
-                    im.save(output_path)
-            except Exception as e:
-                mb.showerror("Error", f"Failed to process image {file_path}: {str(e)}")
+            for file_path in files:
+                try:
+                    with Image.open(file_path) as im:
+                        output_path = output_dir / f"{Path(file_path).stem}.png"
+                        im.save(output_path)
+                except Exception as e:
+                    mb.showerror(
+                        "Ошибка",
+                        f"Не удалось обработать изображение {file_path}: {str(e)}",
+                    )
 
-        mb.showinfo("Информация", "Готово!")
-        self.quit()
+            mb.showinfo("Информация", "Готово!")
 
     def compare_prices(self) -> None:
-        files = self.get_json_files()
-        if not files:
-            return
+        """Сравнение цен и построение графика."""
+        with self.cleanup_context():
+            files = FileDialog.get_json_files()
+            if not files:
+                return
 
-        segment = []
-        price_diffs = []
-        count = 0
+            segment = []
+            price_diffs = []
+            count = 0
 
-        for file_path in files:
-            data = self.json_processor.load_json_file(file_path)
-            for offer in data.get("offers", []):
-                if offer["description"] not in segment:
-                    segment.append(offer["description"])
+            for file_path in files:
+                data = load_json_file(file_path)
+                diffs, diff_count, total = analyze_price_differences(data)
+                price_diffs.extend(diffs)
+                count += diff_count
+                segment.extend(
+                    [offer["description"] for offer in data.get("offers", [])]
+                )
 
-            for desc in segment:
-                prices = []
-                try:
-                    for offer in data["offers"]:
-                        if (
-                            desc == offer["description"]
-                            and offer["price_new"] not in prices
-                        ):
-                            prices.append(offer["price_new"])
+            plt.figure(figsize=config.PRICE_PLOT_SIZE)
+            plt.hist(price_diffs, bins=config.PRICE_PLOT_BINS)
+            plt.savefig(config.PRICE_DIFF_PLOT_FILENAME)
 
-                    if len(prices) > 1:
-                        price_diffs.append(max(prices) - min(prices))
-                        count += 1
-                except KeyError:
-                    print(f"В фиде ошибка, нет новой цены --->{desc}")
-
-        plt.figure(figsize=(10, 8))
-        plt.hist(price_diffs, bins=30)
-        plt.savefig("Разница цен")
-
-        percentage = int(count * 100 / len(segment)) if segment else 0
-        info_message = (
-            f"Всего уникальных офферов ---> {len(segment)}\n"
-            f"Кол-во офферов, у которых разные цены ----> {count}\n"
-            f"Процент офферов с разными ценами --->{percentage} %"
-        )
-        mb.showinfo("Информация", info_message)
-        self.quit()
+            percentage = int(count * 100 / len(segment)) if segment else 0
+            info_message = (
+                f"Всего уникальных офферов ---> {len(segment)}\n"
+                f"Кол-во офферов, у которых разные цены ----> {count}\n"
+                f"Процент офферов с разными ценами --->{percentage} %"
+            )
+            mb.showinfo("Информация", info_message)
 
 
 def main():
+    """Точка входа в приложение."""
     app = App()
     app.mainloop()
 

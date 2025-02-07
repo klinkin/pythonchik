@@ -1,0 +1,44 @@
+{
+  "catalogs": [
+    {
+      "target_regions": null,
+      "target_shops": [],
+      "offers": ["offer1"]
+    },
+    {
+      "offers": ["offer2"]
+    },
+    {
+      "target_regions": ["Invalid Region"],
+      "target_shops": ["Invalid Shop"],
+      "offers": ["offer3", "nonexistent_offer"]
+    }
+  ],
+  "offers": [
+    {
+      "id": "offer1",
+      "description": "",
+      "price_new": 0
+    },
+    {
+      "id": "offer2",
+      "description": "Product with special chars !@#$%",
+      "barcode": "12345",
+      "price_new": -100,
+      "price_old": "invalid"
+    },
+    {
+      "id": "offer3",
+      "description": "Duplicate Product",
+      "barcode": "123456789",
+      "price_new": 100
+    },
+    {
+      "id": "offer3",
+      "description": "Duplicate Product",
+      "barcode": "123456789",
+      "price_new": 200
+    }
+  ],
+  "target_shops_coords": []
+}

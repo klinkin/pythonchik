@@ -4,7 +4,7 @@ PROJECT_PATH := pythonchik
 
 help:
 	@echo "make build 		- Build a docker image"
-	@echo "make lint 		- Syntax check with pylama"
+	@echo "make lint 		- Syntax check"
 	@echo "make pytest 		- Test this project"
 	@echo "make format 		- Format project with ruff and black"
 	@echo "make upload 		- Upload this project to the docker-registry"
@@ -36,7 +36,6 @@ format:
 	poetry run black $(PROJECT_PATH) tests
 	poetry run ruff format $(PROJECT_PATH) tests
 	poetry run ruff check --fix --select I $(PROJECT_PATH) tests
-	yarn fix
 
 purge: clean
 	rm -rf ./.venv
@@ -53,6 +52,8 @@ pytest-ci:
 
 upload: build
 	docker push $(CI_REGISTRY_IMAGE):$(DOCKER_TAG)
+run:
+	python3 -m pythonchik.main
 
 develop: clean
 	poetry -V
@@ -64,7 +65,7 @@ exe:
 	poetry run pyinstaller --clean --onefile --name pythonchik --add-data "$(PROJECT_PATH):$(PROJECT_PATH)" $(PROJECT_PATH)/main.py
 
 app:
-	poetry run pyinstaller --clean --onefile --name pythonchik --add-data "$(PROJECT_PATH):$(PROJECT_PATH)" --windowed $(PROJECT_PATH)/main.py
+	poetry run pyinstaller --clean --onefile --name pythonchik --add-data "$(PROJECT_PATH):$(PROJECT_PATH)" --noconsole $(PROJECT_PATH)/main.py
 
 bump-doc: clean
 	rm -rf docs/build

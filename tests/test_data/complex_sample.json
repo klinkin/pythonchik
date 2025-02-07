@@ -1,0 +1,54 @@
+{
+  "catalogs": [
+    {
+      "target_regions": ["Moscow Region"],
+      "target_shops": ["Shop A"],
+      "offers": ["offer1", "offer2"]
+    },
+    {
+      "target_regions": ["Saint Petersburg"],
+      "target_shops": ["Shop B"],
+      "offers": ["offer3", "offer4"]
+    },
+    {
+      "target_regions": [],
+      "target_shops": ["Shop C"],
+      "offers": ["offer5"]
+    }
+  ],
+  "offers": [
+    {
+      "id": "offer1",
+      "description": "Product A",
+      "barcode": "123456789",
+      "price_new": 100,
+      "price_old": 120
+    },
+    {
+      "id": "offer2",
+      "description": "Product A",
+      "barcode": "987654321",
+      "price_new": 150,
+      "price_old": 180
+    },
+    {
+      "id": "offer3",
+      "description": "Product B",
+      "barcode": "456789123",
+      "price_new": 200
+    },
+    {
+      "id": "offer4",
+      "description": "Product C",
+      "price_new": 300
+    },
+    {
+      "id": "offer5",
+      "description": "Product D",
+      "barcode": "789123456",
+      "price_new": 400,
+      "price_old": 450
+    }
+  ],
+  "target_shops_coords": ["Shop A", "Shop B"]
+}
