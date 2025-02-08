@@ -62,6 +62,13 @@ def app(monkeypatch):
             self.winfo_reqwidth = lambda: 200
             self.winfo_reqheight = lambda: 200
             self._commands = {}
+            self.children = {}
+            self.tk = self
+            self._w = "."
+            self._name = None
+            self.master = None
+            self._tkloaded = True
+            self._tkargs = ()
 
         def createcommand(self, name, func):
             self._commands[name] = func
@@ -70,6 +77,30 @@ def app(monkeypatch):
         def deletecommand(self, name):
             if name in self._commands:
                 del self._commands[name]
+
+        def winfo_id(self):
+            return 1
+
+        def winfo_pathname(self, id):
+            return "."
+
+        def winfo_name(self):
+            return "tk"
+
+        def _root(self):
+            return self
+
+        def getvar(self, name=""):
+            return ""
+
+        def setvar(self, name="", value=""):
+            pass
+
+        def getboolean(self, value):
+            return False
+
+        def call(self, *args):
+            return ""
 
     root = MockTk()
 

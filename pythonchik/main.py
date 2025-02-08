@@ -1,13 +1,12 @@
 import json
 import shutil
-import tkinter as tk
-import tkinter.ttk as ttk
 import zipfile
 from pathlib import Path
 from tkinter import filedialog as fd
 from tkinter import messagebox as mb
 from typing import List
 
+import customtkinter as ctk
 import matplotlib.pyplot as plt
 from PIL import Image
 
@@ -26,7 +25,7 @@ from pythonchik.services import (
 from pythonchik.ui import BaseWindow, FileDialog, ProgressBar
 
 
-class App(tk.Tk, BaseWindow):
+class App(ctk.CTk, BaseWindow):
     """Главное окно приложения.
 
     Предоставляет графический интерфейс для выполнения различных операций
@@ -34,17 +33,32 @@ class App(tk.Tk, BaseWindow):
     """
 
     def __init__(self):
-        tk.Tk.__init__(self)
+        ctk.CTk.__init__(self)
         BaseWindow.__init__(self)
         self.title("Главное меню")
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+        # Set the theme and color scheme
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
+
+        # Configure window size and position
+        self.geometry("800x600")
+        self.minsize(600, 400)
+
         self.setup_ui()
         self.progress_bar = ProgressBar(self)
 
     def setup_ui(self) -> None:
         """Настройка пользовательского интерфейса."""
-        self.main_frame = tk.Frame(self)
-        self.main_frame.pack(expand=True, fill=tk.BOTH, padx=10, pady=10)
+        # Configure grid layout
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+
+        # Create main frame with grid
+        self.main_frame = ctk.CTkFrame(self)
+        self.main_frame.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
+        self.main_frame.grid_columnconfigure(0, weight=1)
 
         buttons = [
             ("1) Собрать адреса из json", self.show_address),
@@ -57,14 +71,16 @@ class App(tk.Tk, BaseWindow):
             ("8) Сравнить цены", self.compare_prices),
         ]
 
-        button_opts = {
-            "padx": config.BUTTON_PADX,
-            "pady": config.BUTTON_PADY,
-            "expand": True,
-            "fill": tk.BOTH,
-        }
-        for text, command in buttons:
-            tk.Button(self.main_frame, text=text, command=command).pack(**button_opts)
+        for i, (text, command) in enumerate(buttons):
+            btn = ctk.CTkButton(
+                self.main_frame,
+                text=text,
+                command=command,
+                height=40,
+                corner_radius=8,
+                font=("Arial", 14),
+            )
+            btn.grid(row=i, column=0, padx=15, pady=8, sticky="ew")
 
     def on_close(self):
         """Обработчик закрытия окна."""
