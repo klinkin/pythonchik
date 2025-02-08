@@ -1,0 +1,30 @@
+{
+  "offers": [
+    {
+      "id": "1",
+      "description": "Товар с неполными данными",
+      "price": null,
+      "barcode": ""
+    },
+    {
+      "id": "2",
+      "description": "Товар с некорректной ценой",
+      "price": "not_a_number",
+      "old_price": -100,
+      "barcode": "4607177746433"
+    }
+  ],
+  "catalogs": [
+    {
+      "id": null,
+      "name": "",
+      "coordinates": {
+        "lat": "invalid",
+        "lon": 999.999
+      }
+    },
+    {
+      "address": "Адрес без других полей"
+    }
+  ]
+}

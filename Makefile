@@ -5,7 +5,7 @@ PROJECT_PATH := pythonchik
 help:
 	@echo "make build 		- Build a docker image"
 	@echo "make lint 		- Syntax check"
-	@echo "make pytest 		- Test this project"
+	@echo "make test 		- Test this project"
 	@echo "make format 		- Format project with ruff and black"
 	@echo "make upload 		- Upload this project to the docker-registry"
 	@echo "make clean 		- Remove files which creates by distutils"
@@ -40,7 +40,7 @@ format:
 purge: clean
 	rm -rf ./.venv
 
-pytest:
+test:
 	poetry run pytest
 
 local:
@@ -52,8 +52,12 @@ pytest-ci:
 
 upload: build
 	docker push $(CI_REGISTRY_IMAGE):$(DOCKER_TAG)
+
+run_original:
+	poetry run python -m pythonchik.main_original
+
 run:
-	python3 -m pythonchik.main
+	poetry run python -m pythonchik.main
 
 develop: clean
 	poetry -V

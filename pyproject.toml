@@ -9,10 +9,12 @@ description = "A Python utility for processing JSON files and images"
 packages = [{include = "pythonchik"}]
 
 [tool.poetry.dependencies]
-python = ">=3.12"
+python = ">=3.13"
 pillow = "*"
 matplotlib = "*"
-customtkinter = "^5.2.2"
+customtkinter = "*"
+pandas = "^2.2.3"
+openpyxl = "^3.1.5"
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.4.0"
@@ -48,8 +50,11 @@ skip_empty = true
 branch = true
 source = ["pythonchik"]
 
+[tool.black]
+line-length = 110
+
 [tool.ruff]
-line-length = 88
+line-length = 110
 target-version = "py311"
 lint.select = [
   "BLE",

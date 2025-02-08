@@ -48,3 +48,6 @@ coverage.xml
 .DS_Store
 *.log
 *.zip
+
+# App output
+оutput/

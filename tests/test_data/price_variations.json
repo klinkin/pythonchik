@@ -1,0 +1,39 @@
+{
+  "offers": [
+    {
+      "id": "1",
+      "description": "Молоко 3.2%",
+      "price": 89.90,
+      "old_price": 99.90,
+      "barcode": "4607025392408"
+    },
+    {
+      "id": "2",
+      "description": "Хлеб белый",
+      "price": 45.50,
+      "old_price": 45.50,
+      "barcode": "4607177746433"
+    },
+    {
+      "id": "3",
+      "description": "Сыр российский",
+      "price": 599.90,
+      "old_price": 799.90,
+      "barcode": "4607177746440"
+    },
+    {
+      "id": "4",
+      "description": "Яблоки Гала",
+      "price": 129.90,
+      "old_price": 159.90,
+      "barcode": "4607177746457"
+    },
+    {
+      "id": "5",
+      "description": "Молоко 3.2%",
+      "price": 92.90,
+      "old_price": 99.90,
+      "barcode": "4607025392408"
+    }
+  ]
+}

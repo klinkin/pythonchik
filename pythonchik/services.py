@@ -1,47 +1,7 @@
-import csv
-import json
-from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 
-def load_json_file(file_path: str) -> Dict[str, Any]:
-    """Загрузка и парсинг JSON файла.
-
-    Функция загружает JSON файл по указанному пути и преобразует его в словарь Python.
-    Поддерживает обработку файлов в кодировке UTF-8.
-
-    Аргументы:
-        file_path (str): Полный путь к JSON файлу для загрузки
-
-    Возвращает:
-        Dict[str, Any]: Словарь, содержащий распарсенные JSON данные
-
-    Исключения:
-        FileNotFoundError: Если файл не существует по указанному пути
-        json.JSONDecodeError: Если содержимое файла не является корректным JSON
-        UnicodeDecodeError: Если файл содержит символы в неподдерживаемой кодировке
-
-    Пример использования:
-        >>> data = load_json_file('data.json')
-        >>> print(data['catalogs'][0]['target_shops'])
-        ['Магазин 1', 'Магазин 2']
-    """
-    try:
-        with open(file_path, encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError as e:
-        raise FileNotFoundError(f"JSON файл не найден: {file_path}") from e
-    except json.JSONDecodeError as e:
-        raise json.JSONDecodeError(
-            f"Некорректный формат JSON в файле {file_path}: {str(e)}", e.doc, e.pos
-        )
-    except UnicodeDecodeError as e:
-        raise UnicodeDecodeError(
-            f"Некорректная кодировка файла {file_path}: {str(e)}", *e.args[1:]
-        )
-
-
-def extract_addresses(data: Dict[str, Any]) -> List[str]:
+def extract_addresses(data: dict[str, Any]) -> list[str]:
     """Извлечь адреса из данных каталога.
 
     Функция обрабатывает словарь с данными каталога и извлекает адреса из полей
@@ -69,40 +29,16 @@ def extract_addresses(data: Dict[str, Any]) -> List[str]:
     addresses = []
     for catalog in data.get("catalogs", []):
         try:
-            addresses.append(
-                catalog.get("target_regions", [catalog["target_shops"][0]])[0]
-            )
+            if catalog.get("target_regions"):
+                addresses.append(catalog["target_regions"][0])
+            else:
+                addresses.append(catalog["target_shops"][0])
         except (KeyError, IndexError):
             continue
     return addresses
 
 
-def save_to_csv(data: List[Any], header: List[str], output_path: str) -> None:
-    """Сохранить данные в CSV файл.
-
-    Аргументы:
-        data: Список данных для сохранения
-        header: Список заголовков столбцов
-        output_path: Путь для сохранения CSV файла
-
-    Исключения:
-        PermissionError: Если нет прав на запись в файл
-        OSError: Если произошла ошибка при записи в файл
-    """
-    try:
-        with open(output_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(header)
-            writer.writerows([[item] for item in data])
-    except PermissionError as e:
-        raise PermissionError(
-            f"Отказано в доступе при записи в файл {output_path}"
-        ) from e
-    except OSError as e:
-        raise OSError(f"Ошибка при записи в CSV файл {output_path}: {str(e)}") from e
-
-
-def check_coordinates_match(data: Dict[str, Any]) -> Tuple[List[str], int, int, int]:
+def check_coordinates_match(data: dict[str, Any]) -> tuple[list[str], int, int, int]:
     """Проверить соответствие между адресами и координатами.
 
     Аргументы:
@@ -116,35 +52,35 @@ def check_coordinates_match(data: Dict[str, Any]) -> Tuple[List[str], int, int, 
         - Количество совпавших координат
 
     Исключения:
-        KeyError: Если структура данных некорректна
-        IndexError: Если массив target_shops пуст
+        ValueError: Если структура данных некорректна или отсутствуют обязательные поля
     """
-    segment = []
-    koor = []
-    nkoor = []
-    count = 0
+    if not isinstance(data, dict):
+        raise ValueError("Входные данные должны быть словарем")
+
+    if "catalogs" not in data or "target_shops_coords" not in data:
+        raise ValueError("Отсутствуют обязательные поля")
+
+    if not data.get("catalogs"):
+        return [], 0, 0, 0
 
     try:
-        for catalog in data.get("catalogs", []):
-            if not catalog.get("target_shops"):
-                raise KeyError("Отсутствует target_shops в каталоге")
-            segment.append(catalog["target_shops"][0])
+        shop_coords = set(data["target_shops_coords"])
+        catalog_shops = []
 
-        for shop in data.get("target_shops_coords", []):
-            koor.append(shop)
+        for catalog in data["catalogs"]:
+            if not isinstance(catalog, dict) or "target_shops" not in catalog or not catalog["target_shops"]:
+                raise ValueError("Некорректный формат каталога")
+            catalog_shops.append(catalog["target_shops"][0])
 
-        for shop in segment:
-            if shop not in koor:
-                nkoor.append(str(shop))
-            else:
-                count += 1
+        unmatched_shops = [shop for shop in catalog_shops if shop not in shop_coords]
+        matched_count = len(catalog_shops) - len(unmatched_shops)
 
-        return nkoor, len(segment), len(koor), count
+        return unmatched_shops, len(catalog_shops), len(shop_coords), matched_count
     except (KeyError, IndexError) as e:
         raise ValueError(f"Некорректная структура данных: {str(e)}") from e
 
 
-def extract_barcodes(data: Dict[str, Any]) -> List[str]:
+def extract_barcodes(data: dict[str, Any]) -> list[str]:
     """Извлечь уникальные штрих-коды из предложений."""
     barcodes = []
     for offer in data.get("offers", []):
@@ -156,7 +92,7 @@ def extract_barcodes(data: Dict[str, Any]) -> List[str]:
     return barcodes
 
 
-def count_unique_offers(data: Dict[str, Any]) -> Tuple[int, int]:
+def count_unique_offers(data: dict[str, Any]) -> tuple[int, int]:
     """Подсчитать общее количество и уникальные предложения.
 
     Аргументы:
@@ -166,23 +102,36 @@ def count_unique_offers(data: Dict[str, Any]) -> Tuple[int, int]:
         Кортеж, содержащий общее количество и количество уникальных предложений
 
     Исключения:
-        KeyError: Если в предложении отсутствуют обязательные поля
+        ValueError: Если в предложении отсутствуют обязательные поля или структура данных некорректна
     """
+    if not isinstance(data, dict):
+        raise ValueError("Входные данные должны быть словарем")
+
+    if "offers" not in data:
+        raise ValueError("Отсутствует поле 'offers'")
+
+    if not data.get("offers"):
+        return 0, 0
+
     offers = []
     count = 0
-    try:
-        for offer in data.get("offers", []):
-            count += 1
-            if "description" not in offer:
-                raise KeyError("Отсутствует поле 'description' в предложении")
-            if offer["description"] not in offers:
-                offers.append(offer["description"])
-        return count, len(offers)
-    except KeyError as e:
-        raise ValueError(f"Некорректные данные предложения: {str(e)}") from e
+
+    for offer in data["offers"]:
+        if not isinstance(offer, dict):
+            raise ValueError("Некорректный формат предложения")
+        if "description" not in offer:
+            raise ValueError("Отсутствует поле 'description' в предложении")
+        if not offer["description"]:
+            raise ValueError("Пустое поле 'description' в предложении")
+
+        count += 1
+        if offer["description"] not in offers:
+            offers.append(offer["description"])
+
+    return count, len(offers)
 
 
-def create_test_json(data: Dict[str, Any]) -> Dict[str, Any]:
+def create_test_json(data: dict[str, Any]) -> dict[str, Any]:
     """Создать тестовый JSON с ограниченными данными."""
     json_file = {"catalogs": data.get("catalogs", [])}
 
@@ -201,7 +150,7 @@ def create_test_json(data: Dict[str, Any]) -> Dict[str, Any]:
     return json_file
 
 
-def analyze_price_differences(data: Dict[str, Any]) -> Tuple[List[float], int, int]:
+def analyze_price_differences(data: dict[str, Any]) -> tuple[list[float], int, int]:
     """Анализ разницы цен в предложениях.
 
     Аргументы:
@@ -214,38 +163,35 @@ def analyze_price_differences(data: Dict[str, Any]) -> Tuple[List[float], int, i
         - Общее количество уникальных товаров
 
     Исключения:
-        ValueError: Если данные о ценах некорректны
+        ValueError: Если данные о ценах некорректны или отрицательны
         KeyError: Если отсутствуют обязательные поля
     """
-    segment = []
+    if not data.get("offers"):
+        return [], 0, 0
+
+    unique_products = {}
+    for offer in data["offers"]:
+        if "description" not in offer:
+            raise KeyError("Missing 'description' field in offer")
+        if "price_new" not in offer:
+            raise KeyError(f"Missing 'price_new' field for offer: {offer['description']}")
+
+        price = offer["price_new"]
+        if not isinstance(price, (int | float)):
+            raise ValueError(f"Invalid price value for {offer['description']}: {price}")
+        if price < 0:
+            raise ValueError("Negative price value")
+
+        desc = offer["description"]
+        if desc not in unique_products:
+            unique_products[desc] = set()
+        unique_products[desc].add(price)
+
     price_diffs = []
-    count = 0
+    diff_count = 0
+    for prices in unique_products.values():
+        if len(prices) > 1:
+            price_diffs.append(max(prices) - min(prices))
+            diff_count += 1
 
-    try:
-        for offer in data.get("offers", []):
-            if "description" not in offer:
-                raise KeyError("Missing 'description' field in offer")
-            if offer["description"] not in segment:
-                segment.append(offer["description"])
-
-        for desc in segment:
-            prices = []
-            for offer in data["offers"]:
-                if desc == offer["description"]:
-                    if "price_new" not in offer:
-                        raise KeyError(f"Missing 'price_new' field for offer: {desc}")
-                    price = offer["price_new"]
-                    if not isinstance(price, (int, float)):
-                        raise ValueError(
-                            f"Некорректное значение цены для {desc}: {price}"
-                        )
-                    if price not in prices:
-                        prices.append(price)
-
-            if len(prices) > 1:
-                price_diffs.append(max(prices) - min(prices))
-                count += 1
-
-        return price_diffs, count, len(segment)
-    except (KeyError, ValueError) as e:
-        raise ValueError(f"Ошибка обработки данных о ценах: {str(e)}") from e
+    return price_diffs, diff_count, len(unique_products)
