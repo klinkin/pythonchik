@@ -80,6 +80,10 @@ class ModernApp(ctk.CTk):
         self.navigation_frame = SideBarFrame(self)
         self.navigation_frame.grid(row=0, column=0, rowspan=2, sticky="nsew")
 
+        # Configure column weights for proper layout
+        self.grid_columnconfigure(1, weight=0)  # Action menu column
+        self.grid_columnconfigure(2, weight=1)  # Result frame column
+
         # Создание фрейма меню действий
         self.action_menu = ActionMenuFrame(
             self,
@@ -93,6 +97,7 @@ class ModernApp(ctk.CTk):
                 "count_unique_offers": self.count_unique_offers,
                 "compare_prices": self.compare_prices,
             },
+            width=200,  # Set fixed width for action menu
         )
         self.action_menu.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
 
@@ -333,15 +338,23 @@ class ModernApp(ctk.CTk):
         """
         files = fd.askopenfilenames(filetypes=config.JSON_FILE_TYPES)
         if not files:
-            mb.showinfo("Информация", "Пожалуйста, выберите JSON файл(ы)")
+            self.log_frame.log("Пожалуйста, выберите JSON файл(ы)")
             return
+
+        self.log_frame.log("Начало проверки соответствия адресов и координат...")
+        self.log_frame.log(f"Выбрано {len(files)} файлов для обработки")
 
         no_coords_list = []
         total_catalogs = 0
         total_coords = 0
         matched_count = 0
 
-        for file_path in files:
+        total_files = len(files)
+        for index, file_path in enumerate(files, 1):
+            progress = int((index / total_files) * 80)
+            self.update_progress(progress, f"Обработка файла {index}/{total_files}: {Path(file_path).name}")
+            self.log_frame.log(f"Анализ файла: {Path(file_path).name}")
+
             data = load_json_file(file_path)
             no_coords, catalogs, coords, matched = check_coordinates_match(data)
             no_coords_list.extend(no_coords)
@@ -349,6 +362,7 @@ class ModernApp(ctk.CTk):
             total_coords += coords
             matched_count += matched
 
+        self.update_progress(90, "Формирование результатов...")
         info_message = (
             f"Всего каталогов: {total_catalogs}\n"
             f"Всего координат: {total_coords}\n"
@@ -356,13 +370,20 @@ class ModernApp(ctk.CTk):
             f"Адреса без координат:\n"
             f"{', '.join(no_coords_list)}"
         )
-        mb.showinfo("Результаты", info_message)
+        self.result_frame.show_text(info_message)
+        self.log_frame.log("Анализ соответствия адресов и координат завершен")
 
         if no_coords_list:
+            self.update_progress(95, "Сохранение результатов...")
             output_path = config.get_unique_filename(
                 Path(files[-1]).stem, config.NO_COORDINATES_SUFFIX, ".csv"
             )
             save_to_csv(no_coords_list, ["Адреса без координат"], str(output_path))
+            self.log_frame.log(f"Адреса без координат сохранены в файл: {output_path}")
+
+        self.update_progress(100, "Готово!")
+        self.log_frame.log("Процесс завершен")
+        self.reset_progress()
 
     def extract_barcodes(self) -> None:
         """Извлечение и сохранение штрих-кодов из JSON файлов.
@@ -382,19 +403,47 @@ class ModernApp(ctk.CTk):
         """
         files = fd.askopenfilenames(filetypes=config.JSON_FILE_TYPES)
         if not files:
-            mb.showinfo("Информация", "Пожалуйста, выберите JSON файл(ы)")
+            self.log_frame.log("Пожалуйста, выберите JSON файл(ы)")
             return
 
-        barcodes = []
-        for file_path in files:
-            data = load_json_file(file_path)
-            result = extract_barcodes(data)
-            barcodes.extend(result)
+        try:
+            self.log_frame.log("Начало извлечения штрих-кодов...")
+            self.log_frame.log(f"Выбрано {len(files)} файлов для обработки")
+            total_files = len(files)
 
-        if barcodes:
-            output_path = config.get_unique_filename(Path(files[-1]).stem, config.BARCODE_SUFFIX, ".csv")
-            save_to_csv(barcodes, ["Штрих-код"], str(output_path))
-            mb.showinfo("Успех", "Штрих-коды успешно извлечены!")
+            barcodes = []
+            for index, file_path in enumerate(files, 1):
+                progress = int((index / total_files) * 80)
+                self.update_progress(
+                    progress, f"Обработка файла {index}/{total_files}: {Path(file_path).name}"
+                )
+                self.log_frame.log(f"Анализ файла: {Path(file_path).name}")
+
+                data = load_json_file(file_path)
+                result = extract_barcodes(data)
+                barcodes.extend(result)
+                self.log_frame.log(f"Найдено {len(result)} штрих-кодов в файле")
+
+            if barcodes:
+                self.update_progress(90, "Сохранение результатов...")
+                output_path = config.get_unique_filename(Path(files[-1]).stem, config.BARCODE_SUFFIX, ".csv")
+                save_to_csv(barcodes, ["Штрих-код"], str(output_path))
+                self.log_frame.log(f"Штрих-коды сохранены в файл: {output_path}")
+                self.result_frame.show_text("\n".join(barcodes))
+                self.update_progress(100, "Готово!")
+                self.log_frame.log(f"Всего извлечено {len(barcodes)} уникальных штрих-кодов")
+            else:
+                self.log_frame.log("Штрих-коды не найдены в выбранных файлах")
+
+        except (FileNotFoundError, PermissionError) as e:
+            error_msg = f"Ошибка доступа к файлам: {str(e)}"
+            self.log_frame.log(error_msg)
+        except (KeyError, ValueError, TypeError) as e:
+            error_msg = f"Ошибка обработки данных: {str(e)}"
+            self.log_frame.log(error_msg)
+        finally:
+            self.update_progress(0)
+            self.log_frame.log("Процесс завершен")
 
     def write_test_json(self) -> None:
         """Создание тестового JSON файла из выбранного файла.
@@ -486,27 +535,41 @@ class ModernApp(ctk.CTk):
         """
         files = fd.askopenfilenames(filetypes=config.JSON_FILE_TYPES)
         if not files:
-            mb.showinfo("Информация", "Пожалуйста, выберите JSON файл(ы)")
+            self.log_frame.log("Пожалуйста, выберите JSON файл(ы)")
             return
 
         try:
-            results = process_multiple_files(list(files), count_unique_offers)
-            total_count = sum(result[0] for result in results)
-            unique_count = len(
-                set(
-                    offer["description"]
-                    for file in files
-                    for data in [load_json_file(file)]
-                    for offer in data.get("offers", [])
-                )
-            )
+            self.log_frame.log("Начало анализа файлов...")
+            total_files = len(files)
 
-            mb.showinfo(
-                "Результаты",
-                f"Всего предложений: {total_count}\nУникальных предложений: {unique_count}",
-            )
+            total_count = 0
+            unique_descriptions = set()
+
+            for index, file in enumerate(files, 1):
+                progress = int((index / total_files) * 80)
+                self.update_progress(progress, f"Обработка файла {index}/{total_files}: {Path(file).name}")
+                self.log_frame.log(f"Анализ файла: {Path(file).name}")
+
+                data = load_json_file(file)
+                offers = data.get("offers", [])
+                total_count += len(offers)
+                unique_descriptions.update(offer["description"] for offer in offers if "description" in offer)
+
+            self.update_progress(90, "Подсчет итоговых результатов...")
+            unique_count = len(unique_descriptions)
+
+            result_message = f"Всего предложений: {total_count}\nУникальных предложений: {unique_count}"
+            self.log_frame.log("Анализ завершен.")
+            self.log_frame.log(result_message)
+            self.result_frame.show_text(result_message)
+            self.update_progress(100, "Готово!")
+
         except (KeyError, ValueError, TypeError, FileNotFoundError) as e:
-            mb.showerror("Ошибка", str(e))
+            error_message = f"Ошибка: {str(e)}"
+            self.log_frame.log(error_message, "ERROR")
+            self.update_progress(0)
+        finally:
+            self.update_progress(0)
 
     def compare_prices(self) -> None:
         """Анализ и визуализация разницы в ценах.
@@ -526,33 +589,64 @@ class ModernApp(ctk.CTk):
         """
         files = fd.askopenfilenames(filetypes=config.JSON_FILE_TYPES)
         if not files:
-            mb.showinfo("Информация", "Пожалуйста, выберите JSON файл(ы)")
+            self.log_frame.log("Пожалуйста, выберите JSON файл(ы)")
             return
 
-        price_diffs = []
-        total_count = 0
-        total_offers = 0
+        try:
+            self.log_frame.log("Начало анализа разницы цен...")
+            self.log_frame.log(f"Выбрано {len(files)} файлов для обработки")
+            total_files = len(files)
 
-        for file_path in files:
-            data = load_json_file(file_path)
-            diffs, diff_count, total = analyze_price_differences(dict(data))
-            price_diffs.extend(diffs)
-            total_count += diff_count
-            total_offers += total
+            price_diffs = []
+            total_count = 0
+            total_offers = 0
 
-        if total_offers > 0:
-            percentage = int(total_count * 100 / total_offers)
-            plt.figure(figsize=config.PRICE_PLOT_SIZE)
-            plt.hist(price_diffs, bins=config.PRICE_PLOT_BINS)
-            plt.savefig(config.get_plot_filename())
-            mb.showinfo(
-                "Результаты",
-                f"Всего уникальных предложений: {total_offers}\n"
-                f"Предложений с различными ценами: {total_count}\n"
-                f"Процент предложений с различными ценами: {percentage}%",
-            )
-        else:
-            mb.showinfo("Информация", "Предложения не найдены в выбранных файлах")
+            self.update_progress(0, "Начало обработки файлов...")
+            for index, file_path in enumerate(files, 1):
+                progress = int((index / total_files) * 80)
+                self.update_progress(
+                    progress, f"Обработка файла {index}/{total_files}: {Path(file_path).name}"
+                )
+                self.log_frame.log(f"Анализ файла: {Path(file_path).name}")
+
+                data = load_json_file(file_path)
+                diffs, diff_count, total = analyze_price_differences(dict(data))
+                price_diffs.extend(diffs)
+                total_count += diff_count
+                total_offers += total
+                self.log_frame.log(f"Найдено {diff_count} предложений с разными ценами в файле")
+
+            if total_offers > 0:
+                self.update_progress(90, "Создание графика...")
+                percentage = int(total_count * 100 / total_offers)
+                fig = plt.figure(figsize=config.PRICE_PLOT_SIZE)
+                plt.hist(price_diffs, bins=config.PRICE_PLOT_BINS)
+                self.result_frame.show_figure(fig)
+                plt.close(fig)
+                plot_filename = config.get_plot_filename()
+                plt.savefig(plot_filename)
+
+                result_message = (
+                    f"Всего уникальных предложений: {total_offers}\n"
+                    f"Предложений с различными ценами: {total_count}\n"
+                    f"Процент предложений с различными ценами: {percentage}%"
+                )
+                self.log_frame.log("Анализ завершен.")
+                self.log_frame.log(result_message)
+
+                self.update_progress(100, "Готово!")
+            else:
+                self.log_frame.log("Предложения не найдены в выбранных файлах")
+
+        except (FileNotFoundError, PermissionError) as e:
+            error_msg = f"Ошибка доступа к файлам: {str(e)}"
+            self.log_frame.log(error_msg)
+        except (KeyError, ValueError, TypeError) as e:
+            error_msg = f"Ошибка обработки данных: {str(e)}"
+            self.log_frame.log(error_msg)
+        finally:
+            self.reset_progress()
+            self.log_frame.log("Процесс завершен")
 
     def update_progress(self, progress: int, message: str = "") -> None:
         """Update the progress indicator and message in the result frame.

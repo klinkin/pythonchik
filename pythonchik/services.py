@@ -57,19 +57,40 @@ def check_coordinates_match(data: dict[str, Any]) -> tuple[list[str], int, int, 
     if not isinstance(data, dict):
         raise ValueError("Входные данные должны быть словарем")
 
-    if "catalogs" not in data or "target_shops_coords" not in data:
-        raise ValueError("Отсутствуют обязательные поля")
+    # Validate catalogs field first as it's the primary requirement
+    if "catalogs" not in data:
+        raise ValueError("Отсутствует обязательное поле: catalogs")
 
     if not data.get("catalogs"):
         return [], 0, 0, 0
 
+    # If we have catalogs, validate target_shops_coords
+    if "target_shops_coords" not in data:
+        # Return all shops as unmatched if target_shops_coords is missing
+        catalog_shops = []
+        for catalog in data["catalogs"]:
+            if not isinstance(catalog, dict):
+                raise ValueError("Каталог должен быть словарем")
+            if "target_shops" not in catalog or not catalog["target_shops"]:
+                continue
+            catalog_shops.append(catalog["target_shops"][0])
+        return catalog_shops, len(catalog_shops), 0, 0
+
     try:
+        # Validate target_shops_coords
+        if not isinstance(data["target_shops_coords"], (list, tuple)):
+            raise ValueError("Поле target_shops_coords должно быть списком")
         shop_coords = set(data["target_shops_coords"])
         catalog_shops = []
 
-        for catalog in data["catalogs"]:
-            if not isinstance(catalog, dict) or "target_shops" not in catalog or not catalog["target_shops"]:
-                raise ValueError("Некорректный формат каталога")
+        # Process catalogs
+        for i, catalog in enumerate(data["catalogs"]):
+            if not isinstance(catalog, dict):
+                raise ValueError(f"Каталог #{i + 1} должен быть словарем")
+            if "target_shops" not in catalog:
+                raise ValueError(f"Отсутствует поле target_shops в каталоге #{i + 1}")
+            if not catalog["target_shops"]:
+                raise ValueError(f"Пустой список target_shops в каталоге #{i + 1}")
             catalog_shops.append(catalog["target_shops"][0])
 
         unmatched_shops = [shop for shop in catalog_shops if shop not in shop_coords]
@@ -85,9 +106,10 @@ def extract_barcodes(data: dict[str, Any]) -> list[str]:
     barcodes = []
     for offer in data.get("offers", []):
         try:
-            if offer["barcode"] not in barcodes and len(offer["barcode"]) > 5:
-                barcodes.append(offer["barcode"])
-        except KeyError:
+            barcode = offer.get("barcode")
+            if barcode and isinstance(barcode, str) and len(barcode) > 5 and barcode not in barcodes:
+                barcodes.append(barcode)
+        except (KeyError, TypeError):
             continue
     return barcodes
 
@@ -110,13 +132,12 @@ def count_unique_offers(data: dict[str, Any]) -> tuple[int, int]:
     if "offers" not in data:
         raise ValueError("Отсутствует поле 'offers'")
 
-    if not data.get("offers"):
+    offers = data.get("offers", [])
+    if not offers:
         return 0, 0
 
-    offers = []
-    count = 0
-
-    for offer in data["offers"]:
+    unique_descriptions = set()
+    for offer in offers:
         if not isinstance(offer, dict):
             raise ValueError("Некорректный формат предложения")
         if "description" not in offer:
@@ -124,11 +145,9 @@ def count_unique_offers(data: dict[str, Any]) -> tuple[int, int]:
         if not offer["description"]:
             raise ValueError("Пустое поле 'description' в предложении")
 
-        count += 1
-        if offer["description"] not in offers:
-            offers.append(offer["description"])
+        unique_descriptions.add(offer["description"])
 
-    return count, len(offers)
+    return len(offers), len(unique_descriptions)
 
 
 def create_test_json(data: dict[str, Any]) -> dict[str, Any]:

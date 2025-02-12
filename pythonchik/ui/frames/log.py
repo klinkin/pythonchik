@@ -18,17 +18,12 @@ class LogFrame(ctk.CTkFrame):
     """
 
     def __init__(self, master: ctk.CTk | ctk.CTkFrame, **kwargs) -> None:
-        """Инициализация фрейма логов.
-
-        Аргументы:
-            master: Родительский виджет
-            **kwargs: Дополнительные аргументы для фрейма
-        """
         super().__init__(master, **kwargs)
 
         # Настройка сетки
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
+        self._text_after_id = None  # Track scheduled updates
 
         # Создание заголовка
         self.header_label = ctk.CTkLabel(
@@ -50,26 +45,38 @@ class LogFrame(ctk.CTkFrame):
         # Создание текстовой области для логов
         self.log_text = ctk.CTkTextbox(self, wrap="word")
         self.log_text.grid(row=1, column=0, columnspan=2, padx=10, pady=(5, 10), sticky="nsew")
-        self.log_text.configure(state="disabled")
+        self.log_text.configure(state="disabled", font=ctk.CTkFont(size=12))
 
     def log(self, message: str, level: str = "INFO") -> None:
-        """Добавление сообщения в лог.
+        if self._text_after_id:
+            self.after_cancel(self._text_after_id)
+            self._text_after_id = None
 
-        Аргументы:
-            message: Текст сообщения для логирования
-            level: Уровень сообщения (INFO, WARNING, ERROR)
-        """
         timestamp = datetime.now().strftime("%H:%M:%S")
-        log_entry = f"[{timestamp}] [{level}] {message}\n"
+        level_colors = {
+            "INFO": ("gray90", "gray90"),
+            "WARNING": ("#FFA500", "#FFA500"),  # Orange for warnings
+            "ERROR": ("#FF0000", "#FF0000"),  # Red for errors
+        }
 
-        self.log_text.configure(state="normal")
+        log_entry = f"[{timestamp}] [{level}] "
+        self.log_text._textbox.configure(state="normal")
         self.log_text.insert("end", log_entry)
+        color = level_colors.get(level, ("gray90", "gray90"))
+        self.log_text.insert("end", f"{message}\n")
+
+        # Add separator only if this is a new operation start
+        if message.startswith("Начало") or message.startswith("Процесс завершен"):
+            self.log_text.insert("end", "─ ─" * 20 + "\n")
+
         self.log_text.see("end")
-        self.log_text.configure(state="disabled")
-        self.log_text.update()
+        self.log_text._textbox.configure(state="disabled")
 
     def clear_log(self) -> None:
-        """Очистка всех записей в логе."""
+        if self._text_after_id:
+            self.after_cancel(self._text_after_id)
+            self._text_after_id = None
+
         self.log_text.configure(state="normal")
         self.log_text.delete("1.0", "end")
         self.log_text.configure(state="disabled")

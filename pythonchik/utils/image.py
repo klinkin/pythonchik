@@ -12,6 +12,7 @@ from typing import Any
 from PIL import Image, UnidentifiedImageError
 
 from pythonchik import config
+from pythonchik.utils.error_handler import ErrorHandler, ErrorSeverity, ImageProcessingError
 
 
 class ImageProcessor:
@@ -19,6 +20,18 @@ class ImageProcessor:
 
     Предоставляет методы для различных операций с изображениями,
     таких как изменение размера, оптимизация и сохранение.
+
+    Методы:
+        resize_image: Изменение размера изображения с сохранением в формате PNG
+        compress_multiple_images: Пакетная обработка и сжатие нескольких изображений
+        convert_format: Конвертация изображения в формат PNG
+        convert_multiple_images: Пакетная конвертация изображений в формат PNG
+
+    Особенности:
+        - Поддерживает различные форматы изображений
+        - Оптимизирует размер файлов при сохранении
+        - Предоставляет возможность отслеживания прогресса обработки
+        - Обеспечивает обработку ошибок и логирование
     """
 
     @staticmethod
@@ -26,35 +39,46 @@ class ImageProcessor:
         image_path: str,
         output_dir: str,
         progress_callback: Callable[[float, str], Any] | None = None,
+        error_handler: ErrorHandler | None = None,
     ) -> None:
-        """Изменение размера изображения.
+        """Изменение размера изображения с сохранением в формате PNG.
 
-        Функция изменяет размер изображения в соответствии с заданным коэффициентом
-        и сохраняет результат в указанную директорию в формате PNG.
+        Функция уменьшает размер изображения в соответствии с коэффициентом
+        IMAGE_RESIZE_RATIO, оптимизирует его и сохраняет в указанную директорию
+        в формате PNG с заданным качеством IMAGE_QUALITY.
 
         Аргументы:
-            image_path: Путь к исходному изображению
+            image_path: Путь к исходному изображению для обработки
             output_dir: Директория для сохранения обработанного изображения
-            progress_callback: Функция обратного вызова для отображения прогресса
+            progress_callback: Функция для отображения прогресса обработки.
+                             Принимает процент выполнения (float) и сообщение (str)
+            error_handler: Обработчик ошибок для логирования и обработки исключений
 
         Возвращает:
             None
 
         Исключения:
+            ImageProcessingError: При проблемах с доступом к директории или файлу
             FileNotFoundError: Если входной файл не существует
-            PermissionError: При отсутствии прав доступа
-            OSError: При ошибке обработки изображения
+            PermissionError: При отсутствии необходимых прав доступа
+            OSError: При ошибках в процессе обработки изображения
 
         Пример использования:
-            >>> ImageProcessor.resize_image('input.jpg', 'output_dir')
+            >>> from pythonchik.utils.image import ImageProcessor
+            >>> ImageProcessor.resize_image('photo.jpg', 'output_dir')
         """
         try:
-            # Проверка существования директории и прав на запись
             output_dir_path = Path(output_dir)
             if not output_dir_path.exists():
-                raise PermissionError(f"Директория не существует: {output_dir}")
+                raise ImageProcessingError(
+                    f"Директория не существует: {output_dir}",
+                    recovery_action="Создайте директорию или выберите существующую",
+                )
             if not os.access(str(output_dir_path), os.W_OK):
-                raise PermissionError(f"Нет прав на запись в директорию: {output_dir}")
+                raise ImageProcessingError(
+                    f"Нет прав на запись в директорию: {output_dir}",
+                    recovery_action="Проверьте права доступа к директории",
+                )
 
             if progress_callback is not None:
                 progress_callback(0, f"Обработка {Path(image_path).name}...")
@@ -73,11 +97,27 @@ class ImageProcessor:
                         progress_callback(100, f"Обработано {Path(image_path).name}")
 
         except FileNotFoundError:
-            raise FileNotFoundError(f"Файл не найден: {image_path}")
+            error = ImageProcessingError(
+                f"Файл не найден: {image_path}", recovery_action="Проверьте правильность пути к файлу"
+            )
+            if error_handler:
+                error_handler.handle_error(error, "Изменение размера изображения", ErrorSeverity.ERROR)
+            raise error
         except PermissionError as e:
-            raise PermissionError(str(e))
+            error = ImageProcessingError(
+                str(e), recovery_action="Проверьте права доступа к файлу и директории"
+            )
+            if error_handler:
+                error_handler.handle_error(error, "Изменение размера изображения", ErrorSeverity.ERROR)
+            raise error
         except (UnidentifiedImageError, OSError) as e:
-            raise OSError(f"Ошибка при обработке изображения {image_path}: {str(e)}")
+            error = ImageProcessingError(
+                f"Ошибка при обработке изображения {image_path}: {str(e)}",
+                recovery_action="Убедитесь, что файл является корректным изображением",
+            )
+            if error_handler:
+                error_handler.handle_error(error, "Изменение размера изображения", ErrorSeverity.ERROR)
+            raise error
 
     @staticmethod
     def compress_multiple_images(
@@ -85,24 +125,33 @@ class ImageProcessor:
         output_dir: str,
         progress_callback: Callable[[float, str], Any] | None = None,
     ) -> list[Path]:
-        """Пакетная обработка нескольких изображений.
+        """Пакетная обработка и сжатие нескольких изображений.
 
-        Функция последовательно обрабатывает список изображений, изменяя их размер
-        и сохраняя результаты в указанную директорию.
+        Функция последовательно обрабатывает список изображений, уменьшая их размер
+        и оптимизируя каждое изображение. Все результаты сохраняются в формате PNG
+        в указанную директорию. При возникновении ошибки с одним файлом, обработка
+        продолжается для остальных файлов.
 
         Аргументы:
-            files: Список путей к файлам изображений
+            files: Список путей к исходным файлам изображений
             output_dir: Директория для сохранения обработанных изображений
-            progress_callback: Функция обратного вызова для отображения прогресса
+            progress_callback: Функция для отображения прогресса обработки.
+                             Принимает процент выполнения (float) и сообщение (str)
 
         Возвращает:
-            List[Path]: Список путей к обработанным файлам
+            List[Path]: Список путей к успешно обработанным файлам
+
+        Особенности:
+            - Автоматически создает директорию вывода, если она не существует
+            - Пропускает файлы, которые не удалось обработать
+            - Отображает прогресс обработки через callback-функцию
 
         Пример использования:
-            >>> files = ['image1.jpg', 'image2.jpg']
-            >>> processed = ImageProcessor.compress_multiple_images(files, 'output_dir')
+            >>> from pathlib import Path
+            >>> files = ['photo1.jpg', 'photo2.png']
+            >>> processed = ImageProcessor.compress_multiple_images(files, 'output')
             >>> print(processed)
-            [PosixPath('output_dir/image1.png'), PosixPath('output_dir/image2.png')]
+            [PosixPath('output/photo1.png'), PosixPath('output/photo2.png')]
         """
         processed_files = []
         output_dir_path = Path(output_dir)
@@ -128,25 +177,29 @@ class ImageProcessor:
 
     @staticmethod
     def convert_format(input_path: str, output_path: str) -> None:
-        """Конвертация изображения в формат PNG.
+        """Конвертация изображения в формат PNG без изменения размера.
 
-        Функция конвертирует изображение в формат PNG без изменения его размера
-        и сохраняет результат по указанному пути.
+        Функция выполняет конвертацию изображения в формат PNG, сохраняя исходные
+        размеры и качество. Перед сохранением проверяется существование директории
+        и наличие прав на запись.
 
         Аргументы:
-            input_path: Путь к исходному изображению
-            output_path: Путь для сохранения конвертированного изображения
+            input_path: Путь к исходному изображению любого поддерживаемого формата
+            output_path: Полный путь для сохранения конвертированного PNG-файла
 
         Возвращает:
             None
 
         Исключения:
             FileNotFoundError: Если входной файл не существует
-            PermissionError: При отсутствии прав доступа
-            OSError: При ошибке конвертации изображения
+            PermissionError: При отсутствии прав доступа к файлу или директории
+            OSError: При ошибках чтения/записи или конвертации изображения
+            UnidentifiedImageError: Если формат входного файла не распознан
 
         Пример использования:
-            >>> ImageProcessor.convert_format('input.jpg', 'output.png')
+            >>> from pythonchik.utils.image import ImageProcessor
+            >>> # Конвертация JPEG в PNG
+            >>> ImageProcessor.convert_format('photo.jpg', 'photo.png')
         """
         try:
             # Проверка существования директории и прав на запись
@@ -167,24 +220,32 @@ class ImageProcessor:
 
     @staticmethod
     def convert_multiple_images(files: list[str], output_dir: str) -> None:
-        """Конвертация нескольких изображений в формат PNG.
+        """Пакетная конвертация изображений в формат PNG.
 
-        Функция последовательно конвертирует список изображений в формат PNG
-        и сохраняет результаты в указанную директорию.
+        Функция последовательно конвертирует все изображения из предоставленного
+        списка в формат PNG, сохраняя их в указанную директорию. При возникновении
+        ошибки с любым файлом, обработка прерывается.
 
         Аргументы:
-            files: Список путей к файлам для конвертации
+            files: Список путей к файлам изображений для конвертации
             output_dir: Директория для сохранения конвертированных файлов
 
         Возвращает:
             None
 
         Исключения:
-            OSError: При ошибке конвертации любого из изображений
+            OSError: При любой ошибке в процессе конвертации (включая FileNotFoundError
+                    и PermissionError). Содержит информацию о проблемном файле
+
+        Особенности:
+            - Сохраняет оригинальные размеры изображений
+            - Использует имя исходного файла с расширением .png
+            - Прерывает обработку при первой ошибке
 
         Пример использования:
-            >>> files = ['image1.jpg', 'image2.jpg']
-            >>> ImageProcessor.convert_multiple_images(files, 'output_dir')
+            >>> from pythonchik.utils.image import ImageProcessor
+            >>> files = ['photo1.jpg', 'photo2.jpeg']
+            >>> ImageProcessor.convert_multiple_images(files, 'png_files')
         """
         for file_path in files:
             try:
