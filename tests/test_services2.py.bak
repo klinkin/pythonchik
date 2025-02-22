@@ -25,7 +25,7 @@ def sample_data() -> CatalogData:
                 "target_shops": ["Shop B"],
                 "offers": ["offer3", "offer4"],
             },
-            {"target_regions": [], "target_shops": ["Shop C"], "offers": ["offer5"]},
+            {"target_regions": ["Shop C Region"], "target_shops": ["Shop C"], "offers": ["offer5"]},
         ],
         "offers": [
             {
@@ -48,7 +48,7 @@ def sample_data() -> CatalogData:
                 "barcode": "456789123",
                 "price_new": 200,
             },
-            {"id": "offer4", "description": "Product C", "price_new": 300},
+            {"id": "offer4", "description": "Product C", "barcode": "654321789", "price_new": 300},
             {
                 "id": "offer5",
                 "description": "Product D",

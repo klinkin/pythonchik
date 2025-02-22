@@ -1,7 +1,7 @@
 from typing import Any
 
 
-def extract_addresses(data: dict[str, Any]) -> list[str]:
+def extract_addresses(data: dict[str, Any], event_bus=None) -> list[str]:
     """Извлечь адреса из данных каталога.
 
     Функция обрабатывает словарь с данными каталога и извлекает адреса из полей
@@ -11,6 +11,7 @@ def extract_addresses(data: dict[str, Any]) -> list[str]:
     Аргументы:
         data (Dict[str, Any]): Словарь с данными каталога, содержащий поля
             'catalogs' с вложенными полями 'target_regions' и 'target_shops'
+        event_bus (Optional[EventBus]): Шина событий для отправки обновлений прогресса
 
     Возвращает:
         List[str]: Список извлеченных адресов
@@ -27,14 +28,31 @@ def extract_addresses(data: dict[str, Any]) -> list[str]:
         ['Москва']
     """
     addresses = []
-    for catalog in data.get("catalogs", []):
+    catalogs = data.get("catalogs", [])
+    total_catalogs = len(catalogs)
+
+    for i, catalog in enumerate(catalogs):
         try:
             if catalog.get("target_regions"):
                 addresses.append(catalog["target_regions"][0])
             else:
                 addresses.append(catalog["target_shops"][0])
+
+            if event_bus:
+                progress = int((i + 1) / total_catalogs * 100)
+                event_bus.publish(
+                    Event(
+                        EventType.PROGRESS_UPDATED,
+                        {
+                            "progress": progress,
+                            "message": f"Обработано {i + 1} из {total_catalogs} каталогов",
+                        },
+                    )
+                )
+
         except (KeyError, IndexError):
             continue
+
     return addresses
 
 

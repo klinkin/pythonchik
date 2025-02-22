@@ -28,6 +28,9 @@ class SideBarFrame(ctk.CTkFrame):
         """
         super().__init__(master, corner_radius=0, **kwargs)
 
+        # Initialize current tab
+        self.current_tab = "json"
+
         # Настройка сетки
         self.grid_rowconfigure(4, weight=1)
         self.grid_columnconfigure(0, weight=1)
@@ -191,3 +194,12 @@ class SideBarFrame(ctk.CTkFrame):
         self.analysis_button.configure(
             fg_color=(("gray75", "gray25") if selected_name == "analysis" else "transparent")
         )
+
+    def select_tab(self, tab_name: str) -> None:
+        """Выбор текущей вкладки.
+
+        Аргументы:
+            tab_name: Имя вкладки для выбора
+        """
+        self.current_tab = tab_name
+        self.update_selected_tab(tab_name)

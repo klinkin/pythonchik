@@ -72,6 +72,17 @@ class LogFrame(ctk.CTkFrame):
         self.log_text.see("end")
         self.log_text._textbox.configure(state="disabled")
 
+    def get_log(self) -> str:
+        """Получить содержимое лога.
+
+        Returns:
+            str: Текущее содержимое лога
+        """
+        self.log_text.configure(state="normal")
+        log_content = self.log_text.get("1.0", "end-1c")
+        self.log_text.configure(state="disabled")
+        return log_content
+
     def clear_log(self) -> None:
         if self._text_after_id:
             self.after_cancel(self._text_after_id)

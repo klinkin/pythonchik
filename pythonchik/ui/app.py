@@ -1,7 +1,14 @@
-"""Реализация современного интерфейса приложения Pythonchik.
+"""Реализация пользовательского интерфейса приложения Pythonchik.
 
-Этот модуль предоставляет современный, настраиваемый интерфейс с использованием CustomTkinter
-с улучшенной навигацией и организацией функциональности.
+Описание:
+    Этот модуль предоставляет современный, настраиваемый интерфейс с использованием CustomTkinter
+    с улучшенной навигацией и организацией функциональности.
+
+Особенности:
+    - Современный, настраиваемый интерфейс
+    - Улучшенная навигация
+    - Организация функциональности по вкладкам
+    - Интеграция с системой событий
 """
 
 import json
@@ -22,6 +29,7 @@ from pythonchik.services import (
     extract_addresses,
     extract_barcodes,
 )
+from pythonchik.ui.core import ApplicationCore
 from pythonchik.ui.frames import ActionMenuFrame, LogFrame, ResultFrame, SideBarFrame
 from pythonchik.utils import (
     create_archive,
@@ -42,13 +50,18 @@ class ModernApp(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
 
+        # Инициализация ядра приложения
+        self.core = ApplicationCore()
+        self.settings_manager = self.core.settings_manager
+
         # Настройка окна
         self.title("Pythonchik by Dima Svirin")
         self.geometry("1200x800")
         self.minsize(1200, 800)
 
-        # Настройка темы
-        ctk.set_appearance_mode("dark")
+        # Настройка темы из сохраненных настроек
+        theme = self.settings_manager.get_theme()
+        ctk.set_appearance_mode(theme)
         ctk.set_default_color_theme("blue")
 
         # Конфигурация сетки
@@ -58,6 +71,9 @@ class ModernApp(ctk.CTk):
 
         # Инициализация компонентов интерфейса
         self.setup_ui()
+
+        # Start background task processing
+        self.after(100, self.core.process_background_tasks)
 
     def setup_ui(self) -> None:
         """Инициализация и настройка всех компонентов интерфейса.
@@ -192,7 +208,9 @@ class ModernApp(ctk.CTk):
             app.change_appearance_mode('Тёмная')
         """
         mode_map = {"Светлая": "light", "Тёмная": "dark", "Системная": "system"}
-        ctk.set_appearance_mode(mode_map[new_appearance_mode])
+        theme = mode_map[new_appearance_mode]
+        ctk.set_appearance_mode(theme)
+        self.settings_manager.set_theme(theme)
 
     def select_frame_by_name(self, name: str) -> None:
         """Показать выбранный фрейм содержимого и обновить состояние навигации.
@@ -211,8 +229,8 @@ class ModernApp(ctk.CTk):
             app = ModernApp()
             app.select_frame_by_name('json')
         """
-        # Update navigation buttons
-        self.navigation_frame.update_selected_tab(name)
+        # Update navigation frame state and buttons
+        self.navigation_frame.select_tab(name)
 
         # Update action menu sections
         if name == "json":
@@ -226,164 +244,141 @@ class ModernApp(ctk.CTk):
         self.result_frame.clear()
         self.log_frame.clear_log()
 
-    def extract_addresses(self) -> None:
-        """Извлечение и сохранение адресов из JSON файлов.
-
-        Загружает выбранные JSON файлы, извлекает из них адреса и
-        сохраняет результаты в CSV файл.
+    def _handle_error(self, error: Exception, operation: str) -> None:
+        """Unified error handling for all operations.
 
         Аргументы:
-            Нет
-
-        Возвращает:
-            None
-
-        Пример использования:
-            app = ModernApp()
-            app.extract_addresses()
+            error: Возникшее исключение
+            operation: Название операции, в которой произошла ошибка
         """
-        files = fd.askopenfilenames(filetypes=config.JSON_FILE_TYPES)
-        if not files:
-            mb.showinfo("Информация", "Пожалуйста, выберите JSON файл(ы)")
-            return
+        error_msg = f"Ошибка при {operation}: {str(error)}"
+        self.log_frame.log(error_msg)
+        mb.showerror("Ошибка", error_msg)
 
-        self.log_frame.log("Начало обработки файлов...")
-        addresses = []
-        for file_path in files:
-            self.log_frame.log(f"Обработка файла: {Path(file_path).name}")
-            data = load_json_file(file_path)
-            result = extract_addresses(data)
-            addresses.extend(result)
+    def _track_progress(self, total_items: int, operation: str) -> None:
+        """Unified progress tracking for long-running operations.
 
-        if addresses:
-            output_path = config.get_unique_filename(Path(files[-1]).stem, config.ADDRESSES_SUFFIX, ".csv")
-            self.log_frame.log(f"Сохранение адресов в файл: {output_path}...")
-            save_to_csv(addresses, ["Адрес"], str(output_path))
-            self.log_frame.log("Адреса успешно извлечены!")
-            self.result_frame.show_text("\n".join(addresses))
+        Аргументы:
+            total_items: Общее количество элементов для обработки
+            operation: Название текущей операции
+        """
+
+        def update(current: int, message: str = "") -> None:
+            progress = int((current / total_items) * 100)
+            self.update_progress(progress, f"{operation}: {message}")
+
+        return update
+
+    def extract_addresses(self) -> None:
+        """Извлечение и сохранение адресов из JSON файлов."""
+        try:
+            files = fd.askopenfilenames(filetypes=config.JSON_FILE_TYPES)
+            if not files:
+                self.log_frame.log("Пожалуйста, выберите JSON файл(ы)")
+                return
+
+            self.log_frame.log("Начало обработки файлов")
+
+            def task():
+                addresses = []
+                for file_path in files:
+                    data = load_json_file(str(file_path))
+                    result = extract_addresses(data)
+                    addresses.extend(result)
+
+                if addresses:
+                    output_path = config.get_unique_filename(
+                        Path(files[-1]).stem, config.ADDRESSES_SUFFIX, ".csv"
+                    )
+                    save_to_csv(addresses, ["Адрес"], str(output_path))
+                    return addresses
+                return []
+
+            self.core.handle_task(
+                task,
+                description="Извлечение адресов",
+                on_complete=lambda result: (
+                    self.result_frame.show_text("\n".join(result)) if result else None,
+                    (
+                        self.log_frame.log("Адреса успешно извлечены!")
+                        if result
+                        else self.log_frame.log("Адреса не найдены")
+                    ),
+                ),
+            )
+
+        except Exception as e:
+            self._handle_error(e, "извлечении адресов")
 
     def compress_images(self) -> None:
-        """Обработка и сжатие выбранных изображений.
-
-        Загружает выбранные изображения, сжимает их и сохраняет
-        результаты в архив. Очищает временные файлы после завершения.
-
-        Аргументы:
-            Нет
-
-        Возвращает:
-            None
-
-        Пример использования:
-            app = ModernApp()
-            app.compress_images()
-        """
-        files = fd.askopenfilenames(filetypes=config.IMAGE_FILE_TYPES)
-        if not files:
-            self.log_frame.log("Пожалуйста, выберите файл(ы) изображений")
-            return
-
-        self.log_frame.log("Начало процесса сжатия изображений...")
-        self.log_frame.log(f"Выбрано {len(files)} файлов для обработки")
-
-        output_dir = Path(config.COMPRESSED_IMAGES_DIR)
-        output_dir.mkdir(exist_ok=True)
-        self.log_frame.log(f"Создана директория для вывода: {output_dir}")
-
+        """Обработка и сжатие выбранных изображений."""
         try:
-            self.log_frame.log("Начало обработки изображений...")
-            processed_files = ImageProcessor.compress_multiple_images(
-                list(files), str(output_dir), self.update_progress
-            )
-            self.log_frame.log(f"Успешно обработано {len(processed_files)} изображений")
+            files = fd.askopenfilenames(filetypes=config.IMAGE_FILE_TYPES)
+            if not files:
+                self.log_frame.log("Пожалуйста, выберите файл(ы) изображений")
+                return
 
-            self.update_progress(90, "Создание архива...")
-            self.log_frame.log("Создание архива обработанных изображений...")
+            self.log_frame.log("Начало процесса сжатия изображений")
+            output_dir = Path(config.COMPRESSED_IMAGES_DIR)
+            output_dir.mkdir(exist_ok=True)
+
+            processed_files = ImageProcessor.compress_multiple_images(list(files), str(output_dir))
+
             archive_path = config.get_archive_path()
             create_archive(processed_files, archive_path)
-            self.log_frame.log(f"Архив успешно создан: {archive_path}")
-
-            self.update_progress(95, "Очистка временных файлов...")
-            self.log_frame.log("Очистка временных файлов...")
             shutil.rmtree(output_dir)
-            self.log_frame.log("Временные файлы успешно очищены")
 
-            self.update_progress(100, "Готово!")
             self.log_frame.log("Процесс сжатия изображений успешно завершен!")
-        except (FileNotFoundError, PermissionError) as e:
-            error_msg = f"Ошибка доступа к файлам: {str(e)}"
-            self.log_frame.log(error_msg)
-        except OSError as e:
-            error_msg = f"Ошибка обработки изображений: {str(e)}"
-            self.log_frame.log(error_msg)
-        finally:
-            self.reset_progress()
-            self.log_frame.log("Процесс завершен")
+
+        except Exception as e:
+            self._handle_error(e, "сжатии изображений")
 
     def check_coordinates(self) -> None:
-        """Проверка и отчет о соответствии адресов и координат.
+        """Проверка и отчет о соответствии адресов и координат."""
+        try:
+            files = fd.askopenfilenames(filetypes=config.JSON_FILE_TYPES)
+            if not files:
+                self.log_frame.log("Пожалуйста, выберите JSON файл(ы)")
+                return
 
-        Анализирует выбранные JSON файлы на предмет соответствия
-        адресов и координат, формирует отчет о результатах.
+            self.log_frame.log("Начало проверки соответствия адресов и координат...")
+            progress_update = self._track_progress(len(files), "Проверка координат")
 
-        Аргументы:
-            Нет
+            no_coords_list = []
+            total_catalogs = 0
+            total_coords = 0
+            matched_count = 0
 
-        Возвращает:
-            None
+            for index, file_path in enumerate(files, 1):
+                progress_update(index, f"Обработка файла: {Path(file_path).name}")
+                data = load_json_file(file_path)
+                no_coords, catalogs, coords, matched = check_coordinates_match(data)
+                no_coords_list.extend(no_coords)
+                total_catalogs += catalogs
+                total_coords += coords
+                matched_count += matched
 
-        Пример использования:
-            app = ModernApp()
-            app.check_coordinates()
-        """
-        files = fd.askopenfilenames(filetypes=config.JSON_FILE_TYPES)
-        if not files:
-            self.log_frame.log("Пожалуйста, выберите JSON файл(ы)")
-            return
-
-        self.log_frame.log("Начало проверки соответствия адресов и координат...")
-        self.log_frame.log(f"Выбрано {len(files)} файлов для обработки")
-
-        no_coords_list = []
-        total_catalogs = 0
-        total_coords = 0
-        matched_count = 0
-
-        total_files = len(files)
-        for index, file_path in enumerate(files, 1):
-            progress = int((index / total_files) * 80)
-            self.update_progress(progress, f"Обработка файла {index}/{total_files}: {Path(file_path).name}")
-            self.log_frame.log(f"Анализ файла: {Path(file_path).name}")
-
-            data = load_json_file(file_path)
-            no_coords, catalogs, coords, matched = check_coordinates_match(data)
-            no_coords_list.extend(no_coords)
-            total_catalogs += catalogs
-            total_coords += coords
-            matched_count += matched
-
-        self.update_progress(90, "Формирование результатов...")
-        info_message = (
-            f"Всего каталогов: {total_catalogs}\n"
-            f"Всего координат: {total_coords}\n"
-            f"Адресов с координатами: {matched_count}\n"
-            f"Адреса без координат:\n"
-            f"{', '.join(no_coords_list)}"
-        )
-        self.result_frame.show_text(info_message)
-        self.log_frame.log("Анализ соответствия адресов и координат завершен")
-
-        if no_coords_list:
-            self.update_progress(95, "Сохранение результатов...")
-            output_path = config.get_unique_filename(
-                Path(files[-1]).stem, config.NO_COORDINATES_SUFFIX, ".csv"
+            info_message = (
+                f"Всего каталогов: {total_catalogs}\n"
+                f"Всего координат: {total_coords}\n"
+                f"Адресов с координатами: {matched_count}\n"
+                f"Адреса без координат:\n"
+                f"{', '.join(no_coords_list)}"
             )
-            save_to_csv(no_coords_list, ["Адреса без координат"], str(output_path))
-            self.log_frame.log(f"Адреса без координат сохранены в файл: {output_path}")
+            self.result_frame.show_text(info_message)
+            self.log_frame.log("Анализ соответствия адресов и координат завершен")
 
-        self.update_progress(100, "Готово!")
-        self.log_frame.log("Процесс завершен")
-        self.reset_progress()
+            if no_coords_list:
+                output_path = config.get_unique_filename(
+                    Path(files[-1]).stem, config.NO_COORDINATES_SUFFIX, ".csv"
+                )
+                save_to_csv(no_coords_list, ["Адреса без координат"], str(output_path))
+                self.log_frame.log(f"Адреса без координат сохранены в файл: {output_path}")
+
+        except Exception as e:
+            self._handle_error(e, "проверке координат")
+        finally:
+            self.reset_progress()
 
     def extract_barcodes(self) -> None:
         """Извлечение и сохранение штрих-кодов из JSON файлов.
@@ -535,7 +530,7 @@ class ModernApp(ctk.CTk):
         """
         files = fd.askopenfilenames(filetypes=config.JSON_FILE_TYPES)
         if not files:
-            self.log_frame.log("Пожалуйста, выберите JSON файл(ы)")
+            mb.showinfo("Информация", "Пожалуйста, выберите JSON файл(ы)")
             return
 
         try:

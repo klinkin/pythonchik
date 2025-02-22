@@ -4,7 +4,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-from pythonchik.utils.error_handler import ErrorHandler, ErrorSeverity, FileOperationError
+from pythonchik.utils.error_handler import ErrorContext, ErrorHandler, ErrorSeverity, FileOperationError
 
 
 def process_multiple_files(files: list[str], processor_func: Any, *args: Any) -> list[Any]:
@@ -47,12 +47,32 @@ def process_multiple_files(files: list[str], processor_func: Any, *args: Any) ->
             result = processor_func(data, *args)
             if isinstance(result, list | tuple):
                 results.extend(result if isinstance(result, list) else [result])
-        except Exception as e:
+        except FileNotFoundError as e:
             error_handler.handle_error(
-                FileOperationError(str(e), recovery_action="Проверьте формат и доступность файла"),
+                FileOperationError(
+                    str(e),
+                    context=ErrorContext(
+                        operation="Обработка файла",
+                        details={"file_path": file_path},
+                        severity=ErrorSeverity.ERROR,
+                        recovery_action="Проверьте наличие файла",
+                    ),
+                ),
                 "Обработка файла",
                 ErrorSeverity.ERROR,
             )
+            raise
+        except Exception as e:
+            error = FileOperationError(
+                str(e),
+                context=ErrorContext(
+                    operation="Обработка файла",
+                    details={"file_path": file_path},
+                    severity=ErrorSeverity.ERROR,
+                    recovery_action="Проверьте формат и доступность файла",
+                ),
+            )
+            error_handler.handle_error(error, "Обработка файла", ErrorSeverity.ERROR)
             continue
     return results
 
@@ -100,8 +120,46 @@ def save_to_csv(data: list[Any], header: list[str], output_path: str) -> None:
             writer = csv.writer(f)
             writer.writerow(header)
             writer.writerows([[item] for item in data])
+    except PermissionError as e:
+        error_handler.handle_error(
+            FileOperationError(
+                "Отказано в доступе",
+                context=ErrorContext(
+                    operation="Сохранение CSV",
+                    details={"output_path": output_path},
+                    severity=ErrorSeverity.ERROR,
+                    recovery_action="Проверьте права доступа к файлу",
+                ),
+            ),
+            "Сохранение CSV",
+            ErrorSeverity.ERROR,
+        )
+        raise PermissionError("Отказано в доступе")
+    except OSError as e:
+        error_handler.handle_error(
+            FileOperationError(
+                "Ошибка при записи в CSV файл",
+                context=ErrorContext(
+                    operation="Сохранение CSV",
+                    details={"output_path": output_path},
+                    severity=ErrorSeverity.ERROR,
+                    recovery_action="Проверьте возможность записи в файл",
+                ),
+            ),
+            "Сохранение CSV",
+            ErrorSeverity.ERROR,
+        )
+        raise OSError("Ошибка при записи в CSV файл")
     except Exception as e:
-        error = FileOperationError(str(e), recovery_action="Проверьте права доступа и путь к файлу")
+        error = FileOperationError(
+            str(e),
+            context=ErrorContext(
+                operation="Сохранение CSV",
+                details={"output_path": output_path},
+                severity=ErrorSeverity.ERROR,
+                recovery_action="Проверьте права доступа и путь к файлу",
+            ),
+        )
         error_handler.handle_error(error, "Сохранение CSV", ErrorSeverity.ERROR)
         raise error
 
@@ -140,8 +198,61 @@ def load_json_file(file_path: str) -> dict[str, Any]:
     try:
         with open(file_path, encoding="utf-8") as f:
             return json.load(f)
+    except FileNotFoundError as e:
+        error_handler.handle_error(
+            FileOperationError(
+                "JSON файл не найден",
+                context=ErrorContext(
+                    operation="Загрузка JSON",
+                    details={"file_path": file_path},
+                    severity=ErrorSeverity.ERROR,
+                    recovery_action="Проверьте путь к файлу",
+                ),
+            ),
+            "Загрузка JSON",
+            ErrorSeverity.ERROR,
+        )
+        raise FileNotFoundError("JSON файл не найден")
+    except json.JSONDecodeError as e:
+        error_handler.handle_error(
+            FileOperationError(
+                "Некорректный формат JSON",
+                context=ErrorContext(
+                    operation="Загрузка JSON",
+                    details={"file_path": file_path},
+                    severity=ErrorSeverity.ERROR,
+                    recovery_action="Проверьте формат JSON файла",
+                ),
+            ),
+            "Загрузка JSON",
+            ErrorSeverity.ERROR,
+        )
+        raise json.JSONDecodeError("Некорректный формат JSON", e.doc, e.pos)
+    except UnicodeDecodeError as e:
+        error_handler.handle_error(
+            FileOperationError(
+                "Некорректная кодировка файла",
+                context=ErrorContext(
+                    operation="Загрузка JSON",
+                    details={"file_path": file_path},
+                    severity=ErrorSeverity.ERROR,
+                    recovery_action="Проверьте кодировку файла",
+                ),
+            ),
+            "Загрузка JSON",
+            ErrorSeverity.ERROR,
+        )
+        raise UnicodeDecodeError(e.encoding, e.object, e.start, e.end, "Некорректная кодировка файла")
     except Exception as e:
-        error = FileOperationError(str(e), recovery_action="Проверьте формат и кодировку файла")
+        error = FileOperationError(
+            str(e),
+            context=ErrorContext(
+                operation="Загрузка JSON",
+                details={"file_path": file_path},
+                severity=ErrorSeverity.ERROR,
+                recovery_action="Проверьте формат и кодировку файла",
+            ),
+        )
         error_handler.handle_error(error, "Загрузка JSON", ErrorSeverity.ERROR)
         raise error
 
@@ -185,14 +296,64 @@ def create_archive(files: list[str], archive_path: str) -> None:
 
         with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zipf:
             for file_path in files:
-                if Path(file_path).exists():
-                    arcname = f"compressed_images/{Path(file_path).name}"
+                file_path_obj = Path(file_path)
+                if file_path_obj.exists():
+                    arcname = file_path_obj.name
                     zipf.write(file_path, arcname=arcname)
                 else:
-                    raise FileOperationError(
-                        f"Файл не найден: {file_path}", recovery_action="Проверьте наличие файла"
+                    error_handler.handle_error(
+                        FileOperationError(
+                            f"Файл не найден: {file_path}",
+                            context=ErrorContext(
+                                operation="Создание архива",
+                                details={"file_path": file_path},
+                                severity=ErrorSeverity.ERROR,
+                                recovery_action="Проверьте наличие файла",
+                            ),
+                        ),
+                        "Создание архива",
+                        ErrorSeverity.ERROR,
                     )
+                    raise FileNotFoundError(f"Файл не найден: {file_path}")
+    except PermissionError as e:
+        error_handler.handle_error(
+            FileOperationError(
+                "Отказано в доступе",
+                context=ErrorContext(
+                    operation="Создание архива",
+                    details={"archive_path": archive_path},
+                    severity=ErrorSeverity.ERROR,
+                    recovery_action="Проверьте права доступа",
+                ),
+            ),
+            "Создание архива",
+            ErrorSeverity.ERROR,
+        )
+        raise PermissionError("Отказано в доступе")
+    except OSError as e:
+        error_handler.handle_error(
+            FileOperationError(
+                "Не удалось создать архив",
+                context=ErrorContext(
+                    operation="Создание архива",
+                    details={"archive_path": archive_path},
+                    severity=ErrorSeverity.ERROR,
+                    recovery_action="Проверьте возможность создания архива",
+                ),
+            ),
+            "Создание архива",
+            ErrorSeverity.ERROR,
+        )
+        raise OSError("Не удалось создать архив")
     except Exception as e:
-        error = FileOperationError(str(e), recovery_action="Проверьте права доступа и наличие файлов")
+        error = FileOperationError(
+            str(e),
+            context=ErrorContext(
+                operation="Создание архива",
+                details={"archive_path": archive_path},
+                severity=ErrorSeverity.ERROR,
+                recovery_action="Проверьте права доступа и наличие файлов",
+            ),
+        )
         error_handler.handle_error(error, "Создание архива", ErrorSeverity.ERROR)
-        raise error
+        raise

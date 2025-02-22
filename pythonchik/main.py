@@ -1,10 +1,20 @@
-"""Entry point for the Pythonchik application."""
+"""Точка входа в приложение Pythonchik.
+
+Этот модуль содержит основную точку входа для запуска приложения.
+"""
 
 from pythonchik.ui.app import ModernApp
 
 
 def main() -> None:
-    """Application entry point."""
+    """Точка входа в приложение.
+
+    Описание:
+        Инициализирует и запускает главное окно приложения.
+
+    Особенности:
+        Создает экземпляр приложения и запускает главный цикл событий.
+    """
     app = ModernApp()
     app.mainloop()
 
