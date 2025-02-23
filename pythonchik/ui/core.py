@@ -11,6 +11,7 @@
     - Обработка ошибок
 """
 
+import logging
 from collections import defaultdict
 from enum import Enum, auto
 from queue import Empty, Queue
@@ -20,7 +21,6 @@ from typing import Any, Callable, Optional
 from pythonchik.utils.error_handler import ErrorContext, ErrorSeverity
 from pythonchik.utils.event_handlers import ErrorHandler, StateChangeHandler, UIActionHandler
 from pythonchik.utils.event_system import Event, EventBus, EventHandler, EventType
-from pythonchik.utils.settings import SettingsManager
 
 
 class ApplicationState(Enum):
@@ -44,13 +44,14 @@ class ApplicationCore:
     """Обработчик основной функциональности приложения.
 
     Описание:
-        Этот класс управляет основной функциональностью приложения.
+        Ядро приложения. Управляет очередью задач и фоновым потоком.
 
     Особенности:
         - Управление состоянием
         - Обработка событий
         - Фоновая обработка задач
         - Обработка ошибок
+        - Не знает ничего о Tkinter.
 
     Пример использования:
         core = ApplicationCore()
@@ -58,28 +59,38 @@ class ApplicationCore:
         core.process_background_tasks()
     """
 
-    def __init__(self) -> None:
+    def __init__(self, event_bus: EventBus) -> None:
         """Инициализация ядра приложения.
 
         Описание:
             Создает новый экземпляр ядра приложения и инициализирует все необходимые компоненты.
         """
-        self.settings_manager = SettingsManager()
-        self.event_bus = EventBus()
+        self.logger = logging.getLogger("pythonchik.core")
+        self.event_bus = event_bus
+
+        self._processing_queue = queue.Queue()
+        self._error_queue = queue.Queue()
+        self._worker_thread: Optional[threading.Thread] = None
+
+        self._is_running = False
+        self._state_lock = threading.Lock()
+
         self._state = ApplicationState.IDLE
-        self._processing_queue = Queue()
-        self._error_queue = Queue()
-        self._task_pool = []
-        self._state_lock = Lock()
-        self._worker_thread = None
-        self._is_running = True
 
-        # Инициализация обработчиков событий
+    def start(self):
+        """Запуск фонового потока."""
+        if not self._is_running:
+            self._is_running = True
+            self._worker_thread = threading.Thread(target=self._process_tasks, daemon=True)
+            self._worker_thread.start()
+            self.logger.info("Core started worker thread.")
 
-        self._setup_event_handlers()
-
-        # Запуск рабочего потока
-        self._start_worker_thread()
+    def stop(self):
+        """Остановка фонового потока."""
+        self._is_running = False
+        if self._worker_thread and self._worker_thread.is_alive():
+            self._worker_thread.join(timeout=2)
+        self.logger.info("Core stopped.")
 
     def get_state(self) -> ApplicationState:
         """Получение текущего состояния приложения.
@@ -90,42 +101,13 @@ class ApplicationCore:
         with self._state_lock:
             return self._state
 
-    def _setup_event_handlers(self) -> None:
-        """Настройка основных обработчиков событий.
-
-        Описание:
-            Регистрирует все необходимые обработчики событий в системе.
-        """
-        self.error_handler = ErrorHandler()
-        self.state_handler = StateChangeHandler()
-        self.ui_handler = UIActionHandler()
-
-        # Используем функции-обработчики вместо классов
-        def on_error(event):
-            self.error_handler.handle(event)
-
-        def on_state_change(event):
-            self.state_handler.handle(event)
-
-        def on_ui_action(event):
-            self.ui_handler.handle(event)
-
-        self.event_bus.subscribe(EventType.ERROR_OCCURRED, on_error)
-        self.event_bus.subscribe(EventType.STATE_CHANGED, on_state_change)
-        self.event_bus.subscribe(EventType.UI_ACTION, on_ui_action)
-
-    def _start_worker_thread(self) -> None:
-        """Запуск рабочего потока для обработки задач."""
-        self._worker_thread = Thread(target=self._process_tasks, daemon=True)
-        self._worker_thread.start()
-
     def _process_tasks(self) -> None:
         """Обработка задач в рабочем потоке."""
         while self._is_running:
             try:
                 try:
                     task = self._processing_queue.get(timeout=0.1)
-                except Empty:
+                except queue.Empty:
                     continue
 
                 with self._state_lock:
@@ -134,15 +116,26 @@ class ApplicationCore:
                 try:
                     result = task()
                     self.event_bus.publish(Event(EventType.TASK_COMPLETED, {"result": result}))
-                except Exception as e:
-                    error_context = ErrorContext(
-                        operation="Обработка задачи", details={"error": str(e)}, severity=ErrorSeverity.ERROR
+                # except Exception as e:
+                #     error_context = ErrorContext(
+                #         operation="Обработка задачи", details={"error": str(e)}, severity=ErrorSeverity.ERROR
+                #     )
+                #     self.event_bus.publish(
+                #         Event(EventType.ERROR_OCCURRED, {"error": str(e), "context": error_context})
+                #     )
+                #     with self._state_lock:
+                #         self._update_state(self.STATE_ERROR)
+
+                except Exception as exc:
+                    self.handle_error(
+                        exc,
+                        ErrorContext(
+                            operation="Обработка задачи",
+                            details={"error": str(exc)},
+                            severity=ErrorSeverity.ERROR,
+                        ),
                     )
-                    self.event_bus.publish(
-                        Event(EventType.ERROR_OCCURRED, {"error": str(e), "context": error_context})
-                    )
-                    with self._state_lock:
-                        self._update_state(self.STATE_ERROR)
+
                 finally:
                     self._processing_queue.task_done()
                     with self._state_lock:
@@ -273,9 +266,11 @@ class ApplicationCore:
     def process_background_tasks(self) -> None:
         """Обработка фоновых задач в очереди.
 
-        Этот метод обрабатывает задачи в фоновой очереди, обеспечивая
-        потокобезопасность и отзывчивость пользовательского интерфейса.
+        This method runs in the main thread every 100ms
+        to handle errors from _error_queue and check if the queue is empty,
+        updating application state accordingly.
         """
+
         try:
             # Process errors in the error queue
             while not self._error_queue.empty():

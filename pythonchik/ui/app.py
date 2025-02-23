@@ -37,7 +37,10 @@ from pythonchik.utils import (
     process_multiple_files,
     save_to_csv,
 )
+from pythonchik.utils.error_context import ErrorContext, ErrorSeverity
+from pythonchik.utils.event_system import Event, EventBus, EventType
 from pythonchik.utils.image import ImageProcessor
+from pythonchik.utils.settings import SettingsManager
 
 
 class ModernApp(ctk.CTk):
@@ -49,10 +52,15 @@ class ModernApp(ctk.CTk):
 
     def __init__(self) -> None:
         super().__init__()
+        self.logger = logging.getLogger("pythonchik.ui.app")
 
-        # Инициализация ядра приложения
-        self.core = ApplicationCore()
-        self.settings_manager = self.core.settings_manager
+        # Инициализируем event_bus и core
+        self.event_bus = EventBus()
+        self.core = ApplicationCore(event_bus=self.event_bus)
+        self.core.start()
+
+        # Инициализируем SettingsManager
+        self.settings_manager = SettingsManager()
 
         # Настройка окна
         self.title("Pythonchik by Dima Svirin")
@@ -64,16 +72,60 @@ class ModernApp(ctk.CTk):
         ctk.set_appearance_mode(theme)
         ctk.set_default_color_theme("blue")
 
-        # Конфигурация сетки
-        self.grid_rowconfigure(0, weight=1)
-        self.grid_columnconfigure(1, weight=1)
-        self.grid_columnconfigure(2, weight=2)
+        # Привязываем метод on_closing к системной кнопке закрытия
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+        # Подключаемся к событиям (после инициализации core, чтобы он успел)
+        self.event_bus.subscribe(EventType.TASK_COMPLETED, self.on_task_completed)
+        self.event_bus.subscribe(EventType.ERROR_OCCURRED, self.on_error_occurred)
+        self.event_bus.subscribe(EventType.STATE_CHANGED, self.on_state_changed)
+
+        # Инициализация обработчиков событий
+        self.setup_event_handlers()
+
+        # Periodically check background tasks (errors, state, etc.)
+        self.after(100, self.core.process_background_tasks)
 
         # Инициализация компонентов интерфейса
         self.setup_ui()
 
-        # Start background task processing
-        self.after(100, self.core.process_background_tasks)
+    def on_closing(self) -> None:
+        """Закрываем приложение корректно."""
+        self.core.stop()
+        self.destroy()
+
+    def setup_event_handlers(self) -> None:
+        """Настройка основных обработчиков событий.
+
+        Описание:
+            Регистрирует все необходимые обработчики событий в системе.
+        """
+        self.error_handler = ErrorHandler()
+        self.state_handler = StateChangeHandler()
+        self.ui_handler = UIActionHandler()
+
+        # Используем функции-обработчики вместо классов
+        def on_error(event):
+            """Обработчик события об ошибке."""
+            self.error_handler.handle(event)
+
+        def on_state_change(event):
+            """Обработчик события изменения состояния приложения."""
+            self.state_handler.handle(event)
+
+        def on_ui_action(event):
+            self.ui_handler.handle(event)
+
+        def on_task_completed(self, event: Event) -> None:
+            """Обработчик события о завершении задачи."""
+            result = event.data.get("result")
+            self.logger.info(f"Task completed with result: {result}")
+            # Обновляем UI, показываем сообщение и т.д.
+
+        self.event_bus.subscribe(EventType.TASK_COMPLETED, on_task_completed)
+        self.event_bus.subscribe(EventType.ERROR_OCCURRED, on_error)
+        self.event_bus.subscribe(EventType.STATE_CHANGED, on_state_change)
+        self.event_bus.subscribe(EventType.UI_ACTION, on_ui_action)
 
     def setup_ui(self) -> None:
         """Инициализация и настройка всех компонентов интерфейса.
@@ -92,6 +144,11 @@ class ModernApp(ctk.CTk):
             app = ModernApp()
             app.setup_ui()
         """
+        # Конфигурация сетки
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_columnconfigure(2, weight=2)
+
         # Создание фрейма навигации
         self.navigation_frame = SideBarFrame(self)
         self.navigation_frame.grid(row=0, column=0, rowspan=2, sticky="nsew")
