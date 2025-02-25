@@ -4,6 +4,7 @@
 """
 
 from pythonchik.ui.app import ModernApp
+from pythonchik.utils.logging_config import setup_logging
 
 
 def main() -> None:
@@ -12,9 +13,10 @@ def main() -> None:
     Описание:
         Инициализирует и запускает главное окно приложения.
 
-    Особенности:
+    Note:
         Создает экземпляр приложения и запускает главный цикл событий.
     """
+    setup_logging()
     app = ModernApp()
     app.mainloop()
 

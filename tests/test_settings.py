@@ -19,10 +19,10 @@ from pythonchik.utils.settings import SettingsManager
 def settings_dir() -> Generator[Path, None, None]:
     """Создает временную директорию настроек для тестирования.
 
-    Возвращает:
+    Returns:
         Generator с путем к временной директории.
 
-    Особенности:
+    Note:
         Автоматически удаляет временную директорию после завершения теста.
     """
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -33,10 +33,10 @@ def settings_dir() -> Generator[Path, None, None]:
 def settings_manager(settings_dir: Path) -> SettingsManager:
     """Создает экземпляр SettingsManager для тестирования.
 
-    Аргументы:
+    Args:
         settings_dir: Путь к временной директории настроек
 
-    Возвращает:
+    Returns:
         Настроенный экземпляр SettingsManager.
     """
     return SettingsManager(settings_dir)
@@ -45,10 +45,10 @@ def settings_manager(settings_dir: Path) -> SettingsManager:
 def test_default_settings(settings_manager: SettingsManager) -> None:
     """Проверяет корректность загрузки настроек по умолчанию.
 
-    Аргументы:
+    Args:
         settings_manager: Тестируемый экземпляр SettingsManager
 
-    Особенности:
+    Note:
         Проверяет наличие и значения всех настроек по умолчанию.
     """
     assert settings_manager.get_theme() == "system"
@@ -58,11 +58,11 @@ def test_default_settings(settings_manager: SettingsManager) -> None:
 def test_save_load_settings(settings_manager: SettingsManager, settings_dir: Path) -> None:
     """Проверяет сохранение и загрузку пользовательских настроек.
 
-    Аргументы:
+    Args:
         settings_manager: Тестируемый экземпляр SettingsManager
         settings_dir: Путь к временной директории настроек
 
-    Особенности:
+    Note:
         Проверяет сохранение и восстановление пользовательских настроек.
     """
     settings_manager.set_theme("dark")
@@ -77,10 +77,10 @@ def test_save_load_settings(settings_manager: SettingsManager, settings_dir: Pat
 def test_theme_settings(settings_manager: SettingsManager) -> None:
     """Проверяет управление настройками темы.
 
-    Аргументы:
+    Args:
         settings_manager: Тестируемый экземпляр SettingsManager
 
-    Особенности:
+    Note:
         Проверяет установку и получение настроек темы интерфейса.
     """
     settings_manager.set_theme("light")
@@ -90,10 +90,10 @@ def test_theme_settings(settings_manager: SettingsManager) -> None:
 def test_last_directory(settings_manager: SettingsManager) -> None:
     """Проверяет управление последней использованной директорией.
 
-    Аргументы:
+    Args:
         settings_manager: Тестируемый экземпляр SettingsManager
 
-    Особенности:
+    Note:
         Проверяет сохранение и получение пути последней директории.
     """
     test_path = "/test/last/directory"
@@ -104,10 +104,10 @@ def test_last_directory(settings_manager: SettingsManager) -> None:
 def test_missing_settings(settings_dir: Path) -> None:
     """Проверяет обработку отсутствующих настроек.
 
-    Аргументы:
+    Args:
         settings_dir: Путь к временной директории настроек
 
-    Особенности:
+    Note:
         Проверяет корректность загрузки настроек по умолчанию при отсутствии файла.
     """
     manager = SettingsManager(settings_dir)
@@ -117,10 +117,10 @@ def test_missing_settings(settings_dir: Path) -> None:
 def test_corrupted_settings(settings_dir: Path) -> None:
     """Проверяет обработку поврежденного файла настроек.
 
-    Аргументы:
+    Args:
         settings_dir: Путь к временной директории настроек
 
-    Особенности:
+    Note:
         Проверяет восстановление настроек по умолчанию при повреждении файла.
     """
     settings_file = settings_dir / "settings.json"
@@ -134,11 +134,11 @@ def test_corrupted_settings(settings_dir: Path) -> None:
 def test_settings_persistence(settings_manager: SettingsManager, settings_dir: Path) -> None:
     """Проверяет сохранение настроек между сессиями.
 
-    Аргументы:
+    Args:
         settings_manager: Тестируемый экземпляр SettingsManager
         settings_dir: Путь к временной директории настроек
 
-    Особенности:
+    Note:
         Проверяет сохранение настроек при создании нового экземпляра менеджера.
     """
     settings_manager.set_theme("dark")

@@ -4,28 +4,9 @@
 включая форматирование сообщений и логирование.
 """
 
-from dataclasses import dataclass
-from enum import Enum
-from typing import Any, Callable
+from typing import Callable
 
-
-class ErrorSeverity(Enum):
-    """Уровни серьезности ошибок."""
-
-    INFO = "INFO"
-    WARNING = "WARNING"
-    ERROR = "ERROR"
-    CRITICAL = "CRITICAL"
-
-
-@dataclass
-class ErrorContext:
-    """Контекст ошибки для более детального логирования."""
-
-    operation: str
-    details: dict[str, Any]
-    severity: ErrorSeverity
-    recovery_action: str | None = None
+from pythonchik.utils.error_context import ErrorContext, ErrorSeverity
 
 
 class AppError(Exception):
@@ -98,7 +79,7 @@ class ErrorHandler:
     ) -> None:
         """Обрабатывает ошибку и логирует ее.
 
-        Аргументы:
+        Args:
             error: Исключение для обработки
             operation: Название операции, при которой произошла ошибка
             severity: Уровень серьезности ошибки

@@ -22,9 +22,9 @@ class SideBarFrame(ctk.CTkFrame):
     def __init__(self, master: ctk.CTk | ctk.CTkFrame, **kwargs: Any) -> None:
         """Инициализация фрейма навигации.
 
-        Аргументы:
+        Args:
             master: Родительский виджет
-            **kwargs: Дополнительные аргументы для фрейма
+            **kwargs: Дополнительные Args для фрейма
         """
         super().__init__(master, corner_radius=0, **kwargs)
 
@@ -127,13 +127,13 @@ class SideBarFrame(ctk.CTkFrame):
     ) -> ctk.CTkButton:
         """Создание кнопки навигации с единым стилем.
 
-        Аргументы:
+        Args:
             text: Текст кнопки
             image: Иконка кнопки
             row: Позиция в сетке (строка)
             tooltip: Подсказка при наведении (опционально)
 
-        Возвращает:
+        Returns:
             CTkButton: Созданная кнопка навигации
         """
         button = ctk.CTkButton(
@@ -168,7 +168,7 @@ class SideBarFrame(ctk.CTkFrame):
     ) -> None:
         """Установка функций обратного вызова для всех кнопок навигации.
 
-        Аргументы:
+        Args:
             json_command: Обработчик для кнопки операций с JSON
             image_command: Обработчик для кнопки операций с изображениями
             analysis_command: Обработчик для кнопки анализа
@@ -182,7 +182,7 @@ class SideBarFrame(ctk.CTkFrame):
     def update_selected_tab(self, selected_name: str) -> None:
         """Обновление визуального состояния кнопок навигации на основе выбора.
 
-        Аргументы:
+        Args:
             selected_name: Имя выбранной вкладки ('json', 'image' или 'analysis')
         """
         self.json_button.configure(
@@ -198,7 +198,7 @@ class SideBarFrame(ctk.CTkFrame):
     def select_tab(self, tab_name: str) -> None:
         """Выбор текущей вкладки.
 
-        Аргументы:
+        Args:
             tab_name: Имя вкладки для выбора
         """
         self.current_tab = tab_name

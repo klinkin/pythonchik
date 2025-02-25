@@ -53,7 +53,7 @@ class ResultFrame(ctk.CTkFrame):
     def show_text(self, content: str) -> None:
         """Отображение текстового содержимого.
 
-        Аргументы:
+        Args:
             content: Текстовое содержимое для отображения
         """
         if self._text_after_id:
@@ -69,7 +69,7 @@ class ResultFrame(ctk.CTkFrame):
     def show_image(self, image_path: str) -> None:
         """Отображение изображения.
 
-        Аргументы:
+        Args:
             image_path: Путь к файлу изображения
         """
         self.text_display.grid_remove()
@@ -100,7 +100,7 @@ class ResultFrame(ctk.CTkFrame):
     def show_figure(self, figure: Figure) -> None:
         """Отображение matplotlib figure.
 
-        Аргументы:
+        Args:
             figure: Matplotlib Figure для отображения
         """
         self.text_display.grid_remove()

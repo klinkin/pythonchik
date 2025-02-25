@@ -21,7 +21,7 @@ class EventHandler(ABC):
         Все конкретные обработчики событий должны наследоваться от этого класса
         и реализовывать метод handle.
 
-    Особенности:
+    Note:
         Является абстрактным классом, требующим реализации метода handle.
     """
 
@@ -29,10 +29,10 @@ class EventHandler(ABC):
     def handle(self, event: Event) -> None:
         """Обработать событие.
 
-        Аргументы:
+        Args:
             event: Событие для обработки
 
-        Особенности:
+        Note:
             Абстрактный метод, должен быть реализован в подклассах.
         """
         pass
@@ -45,7 +45,7 @@ class StateChangeHandler(EventHandler):
         Управляет переходами состояния приложения и обеспечивает целостность данных
         во время изменений состояния.
 
-    Особенности:
+    Note:
         Поддерживает откат к предыдущему состоянию при ошибках.
     """
 
@@ -56,13 +56,13 @@ class StateChangeHandler(EventHandler):
     def handle(self, event: Event) -> None:
         """Обработать события изменения состояния.
 
-        Аргументы:
+        Args:
             event: Событие изменения состояния, содержащее новые данные
 
         Исключения:
             ValueError: Если данные состояния недействительны или отсутствуют
 
-        Особенности:
+        Note:
             Включает валидацию состояния и механизм отката при ошибках.
         """
         if not event.data or "state" not in event.data:
@@ -87,7 +87,7 @@ class StateChangeHandler(EventHandler):
     def _validate_state_transition(self, new_state: Dict[str, Any]) -> None:
         """Проверить допустимость перехода состояния.
 
-        Аргументы:
+        Args:
             new_state: Новое состояние для проверки
 
         Исключения:
@@ -99,7 +99,7 @@ class StateChangeHandler(EventHandler):
     def _apply_state_change(self, new_state: Dict[str, Any]) -> None:
         """Применить изменения нового состояния.
 
-        Аргументы:
+        Args:
             new_state: Новое состояние для применения
         """
         logger.debug(f"Применение нового состояния: {new_state}")
@@ -108,10 +108,10 @@ class StateChangeHandler(EventHandler):
     def _handle_failed_transition(self, error: Exception) -> None:
         """Обработать неудачные переходы состояния.
 
-        Аргументы:
+        Args:
             error: Исключение, вызвавшее неудачу
 
-        Особенности:
+        Note:
             Выполняет откат к предыдущему состоянию при ошибке.
         """
         logger.warning(f"Откат к предыдущему состоянию: {self._previous_state}")
@@ -126,7 +126,7 @@ class ErrorHandler(EventHandler):
         Предоставляет централизованную обработку ошибок и стратегии восстановления
         для различных типов ошибок приложения.
 
-    Особенности:
+    Note:
         Поддерживает различные стратегии восстановления для разных типов ошибок.
     """
 
@@ -140,13 +140,13 @@ class ErrorHandler(EventHandler):
     def handle(self, event: Event) -> None:
         """Обработать события ошибок с соответствующими стратегиями восстановления.
 
-        Аргументы:
+        Args:
             event: Событие ошибки, содержащее детали ошибки
 
         Исключения:
             ValueError: Если данные об ошибке отсутствуют или недействительны
 
-        Особенности:
+        Note:
             Применяет соответствующую стратегию восстановления на основе типа ошибки.
         """
         if not event.data or "error" not in event.data:
@@ -170,11 +170,11 @@ class ErrorHandler(EventHandler):
     def _apply_recovery_strategy(self, error_type: str, error: Dict[str, Any]) -> None:
         """Применить соответствующую стратегию восстановления для типа ошибки.
 
-        Аргументы:
+        Args:
             error_type: Тип ошибки
             error: Данные об ошибке
 
-        Особенности:
+        Note:
             Выбирает и применяет стратегию восстановления из предопределенного списка.
         """
         strategy = self.ERROR_RECOVERY_STRATEGIES.get(error_type)
@@ -188,11 +188,11 @@ class ErrorHandler(EventHandler):
     def _handle_recovery_failure(self, original_error: Dict[str, Any], recovery_error: Exception) -> None:
         """Обработать случаи, когда стратегия восстановления не удалась.
 
-        Аргументы:
+        Args:
             original_error: Исходная ошибка
             recovery_error: Ошибка восстановления
 
-        Особенности:
+        Note:
             Логирует как исходную ошибку, так и ошибку восстановления.
         """
         logger.critical("Стратегия восстановления не удалась")
@@ -202,10 +202,10 @@ class ErrorHandler(EventHandler):
     def _handle_unknown_error(self, error: Dict[str, Any]) -> None:
         """Обработать неизвестные типы ошибок.
 
-        Аргументы:
+        Args:
             error: Данные об ошибке
 
-        Особенности:
+        Note:
             Предоставляет общую логику обработки для неизвестных типов ошибок.
         """
         logger.error(f"Обнаружен неизвестный тип ошибки: {error}")
@@ -219,21 +219,21 @@ class UIActionHandler(EventHandler):
         Обрабатывает различные действия пользовательского интерфейса путем
         сопоставления типов событий с соответствующими методами.
 
-    Особенности:
+    Note:
         Поддерживает динамическую диспетчеризацию событий на основе их типа.
     """
 
     def handle(self, event: Event) -> None:
         """Обработать события действий пользовательского интерфейса.
 
-        Аргументы:
+        Args:
             event: Событие действия UI
 
         Исключения:
             ValueError: Если тип события отсутствует или недействителен
             NotImplementedError: Если обработчик для типа события не найден
 
-        Особенности:
+        Note:
             Выполняет валидацию типа события и маршрутизацию к соответствующему обработчику.
         """
         logger.info(f"Получено событие действия UI: {event.type}")
@@ -286,7 +286,7 @@ class UIActionHandler(EventHandler):
     def extract_addresses(self) -> None:
         """Обработать событие извлечения адресов.
 
-        Особенности:
+        Note:
             Выполняет извлечение и валидацию адресов из входных данных.
         """
         logger.info("Начало извлечения адресов")
@@ -307,7 +307,7 @@ class UIActionHandler(EventHandler):
     def check_coordinates(self) -> None:
         """Обработать событие проверки координат.
 
-        Особенности:
+        Note:
             Проверяет формат и валидность географических координат.
         """
         logger.info("Начало проверки координат")
@@ -328,7 +328,7 @@ class UIActionHandler(EventHandler):
     def extract_barcodes(self) -> None:
         """Обработать событие извлечения штрих-кодов.
 
-        Особенности:
+        Note:
             Выполняет извлечение и декодирование штрих-кодов из изображений.
         """
         logger.info("Начало извлечения штрих-кодов")
@@ -349,7 +349,7 @@ class UIActionHandler(EventHandler):
     def write_test_json(self) -> None:
         """Обработать событие записи тестового JSON.
 
-        Особенности:
+        Note:
             Создает тестовый JSON-файл с заданными параметрами.
         """
         logger.info("Начало записи тестового JSON")
@@ -363,7 +363,7 @@ class UIActionHandler(EventHandler):
     def compress_images(self) -> None:
         """Обработать событие сжатия изображений.
 
-        Особенности:
+        Note:
             Выполняет оптимизацию размера изображений с сохранением качества.
         """
         logger.info("Начало сжатия изображений")
@@ -377,7 +377,7 @@ class UIActionHandler(EventHandler):
     def convert_image_format(self) -> None:
         """Обработать событие конвертации формата изображений.
 
-        Особенности:
+        Note:
             Преобразует изображения в указанный формат с сохранением качества.
         """
         logger.info("Начало конвертации формата изображений")
@@ -391,7 +391,7 @@ class UIActionHandler(EventHandler):
     def count_unique_offers(self) -> None:
         """Обработать событие подсчета уникальных предложений.
 
-        Особенности:
+        Note:
             Анализирует и подсчитывает количество уникальных предложений.
         """
         logger.info("Начало подсчета уникальных предложений")
@@ -405,7 +405,7 @@ class UIActionHandler(EventHandler):
     def compare_prices(self) -> None:
         """Обработать событие сравнения цен.
 
-        Особенности:
+        Note:
             Выполняет анализ и сравнение цен между различными предложениями.
         """
         logger.info("Начало сравнения цен")

@@ -33,7 +33,7 @@ class SettingsManager:
             return self._get_default_settings()
 
     def _get_default_settings(self) -> Dict[str, Any]:
-        """Возвращает настройки по умолчанию."""
+        """Returns настройки по умолчанию."""
         return {"theme": "dark", "last_directory": str(Path.home()), "auto_save": True, "show_tooltips": True}
 
     def save_settings(self) -> None:

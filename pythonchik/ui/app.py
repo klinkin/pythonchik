@@ -1,10 +1,10 @@
-"""Реализация пользовательского интерфейса приложения Pythonchik.
+"""
+Реализация пользовательского интерфейса приложения Pythonchik.
 
-Описание:
-    Этот модуль предоставляет современный, настраиваемый интерфейс с использованием CustomTkinter
-    с улучшенной навигацией и организацией функциональности.
+Этот модуль предоставляет современный, настраиваемый интерфейс с использованием CustomTkinter
+с улучшенной навигацией и организацией функциональности.
 
-Особенности:
+Примечания:
     - Современный, настраиваемый интерфейс
     - Улучшенная навигация
     - Организация функциональности по вкладкам
@@ -12,6 +12,7 @@
 """
 
 import json
+import logging
 import shutil
 from pathlib import Path
 from tkinter import filedialog as fd
@@ -21,6 +22,7 @@ import customtkinter as ctk
 import matplotlib.pyplot as plt
 
 from pythonchik import config
+from pythonchik.core import ApplicationCore
 from pythonchik.services import (
     analyze_price_differences,
     check_coordinates_match,
@@ -29,12 +31,10 @@ from pythonchik.services import (
     extract_addresses,
     extract_barcodes,
 )
-from pythonchik.ui.core import ApplicationCore
 from pythonchik.ui.frames import ActionMenuFrame, LogFrame, ResultFrame, SideBarFrame
 from pythonchik.utils import (
     create_archive,
     load_json_file,
-    process_multiple_files,
     save_to_csv,
 )
 from pythonchik.utils.error_context import ErrorContext, ErrorSeverity
@@ -46,28 +46,38 @@ from pythonchik.utils.settings import SettingsManager
 class ModernApp(ctk.CTk):
     """Главное окно приложения, реализующее современный интерфейс.
 
-    Этот класс управляет общей компоновкой приложения и координирует
-    взаимодействие между различными компонентами пользовательского интерфейса и бизнес-логикой.
+    Управляет компоновкой приложения, настройкой тем, а также координирует
+    взаимодействие между компонентами пользовательского интерфейса (UI) и бизнес-логикой.
     """
 
     def __init__(self) -> None:
+        """Инициализирует главное окно приложения и все основные UI-компоненты.
+
+        Запускает ApplicationCore (ядро), настраивает event_bus для подписки
+        на события, инициализирует SettingsManager, задаёт тему
+        CustomTkinter, а также вызывает методы по настройке интерфейса.
+
+        Note:
+            В конце инициализации планируется периодический вызов
+            `self.core.process_background_tasks` через `after(100, ...).
+        """
         super().__init__()
         self.logger = logging.getLogger("pythonchik.ui.app")
 
-        # Инициализируем event_bus и core
+        # Инициализация event_bus и ядро
         self.event_bus = EventBus()
         self.core = ApplicationCore(event_bus=self.event_bus)
         self.core.start()
 
-        # Инициализируем SettingsManager
+        # Инициализируем менеджер настроек
         self.settings_manager = SettingsManager()
 
-        # Настройка окна
+        # Настройка окна (размеры, title, минимальные размеры)
         self.title("Pythonchik by Dima Svirin")
         self.geometry("1200x800")
         self.minsize(1200, 800)
 
-        # Настройка темы из сохраненных настроек
+        # Настройка темы из сохранённых настроек
         theme = self.settings_manager.get_theme()
         ctk.set_appearance_mode(theme)
         ctk.set_default_color_theme("blue")
@@ -75,89 +85,133 @@ class ModernApp(ctk.CTk):
         # Привязываем метод on_closing к системной кнопке закрытия
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
-        # Подключаемся к событиям (после инициализации core, чтобы он успел)
-        self.event_bus.subscribe(EventType.TASK_COMPLETED, self.on_task_completed)
-        self.event_bus.subscribe(EventType.ERROR_OCCURRED, self.on_error_occurred)
-        self.event_bus.subscribe(EventType.STATE_CHANGED, self.on_state_changed)
-
-        # Инициализация обработчиков событий
+        # Инициализируем обработчики событий (подписки тоже здесь)
         self.setup_event_handlers()
 
-        # Periodically check background tasks (errors, state, etc.)
+        # Периодически проверяем фоновые задачи
         self.after(100, self.core.process_background_tasks)
 
         # Инициализация компонентов интерфейса
         self.setup_ui()
 
-    def on_closing(self) -> None:
-        """Закрываем приложение корректно."""
-        self.core.stop()
-        self.destroy()
+        # Подключение UI-логирования (теперь log_frame уже существует)
+        self.attach_ui_logger()
+
+    def attach_ui_logger(self):
+        """Добавляет логирование в UI после инициализации log_frame."""
+        if hasattr(self, "log_frame") and self.log_frame:
+
+            class UIHandler(logging.Handler):
+                def emit(self, record):
+                    level = record.levelname
+                    msg = self.format(record)
+                    self.log_frame.log(msg, level)
+
+            ui_handler = UIHandler()
+            ui_handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+            logging.getLogger().addHandler(ui_handler)
+
+            self.logger.info("Логирование в UI подключено")
 
     def setup_event_handlers(self) -> None:
-        """Настройка основных обработчиков событий.
+        """Настраивает подписки на события и дополнительные хендлеры.
 
-        Описание:
-            Регистрирует все необходимые обработчики событий в системе.
+        Все подписки на EventBus находятся здесь.
         """
-        self.error_handler = ErrorHandler()
-        self.state_handler = StateChangeHandler()
-        self.ui_handler = UIActionHandler()
 
-        # Используем функции-обработчики вместо классов
-        def on_error(event):
-            """Обработчик события об ошибке."""
-            self.error_handler.handle(event)
+        def on_task_completed(event: Event) -> None:
+            """Обработчик события TASK_COMPLETED.
 
-        def on_state_change(event):
-            """Обработчик события изменения состояния приложения."""
-            self.state_handler.handle(event)
-
-        def on_ui_action(event):
-            self.ui_handler.handle(event)
-
-        def on_task_completed(self, event: Event) -> None:
-            """Обработчик события о завершении задачи."""
+            Args:
+                event (Event): Событие, содержащее данные о результате (`event.data["result"]`).
+            """
             result = event.data.get("result")
             self.logger.info(f"Task completed with result: {result}")
-            # Обновляем UI, показываем сообщение и т.д.
+            # Здесь можно обновить UI, показать уведомление и т.д.
 
+        def on_error_occurred(event: Event) -> None:
+            """Обработчик события ERROR_OCCURRED.
+
+            Args:
+                event (Event): Событие об ошибке, внутри `event.data["error"]`.
+            """
+            error_msg = event.data.get("error", "Unknown error")
+            self.logger.error(f"Error occurred: {error_msg}")
+            mb.showerror("Ошибка", f"Произошла ошибка: {error_msg}")
+
+        def on_state_changed(event: Event) -> None:
+            """Обработчик события STATE_CHANGED.
+
+            Args:
+                event (Event): Событие, содержащее новое состояние в `event.data["state"]`.
+            """
+            new_state = event.data.get("state")
+            self.logger.info(f"Application state changed to: {new_state}")
+            # Можно обновить статус-бары, заголовки и т.д.
+
+        # Подписываемся на основные события
         self.event_bus.subscribe(EventType.TASK_COMPLETED, on_task_completed)
-        self.event_bus.subscribe(EventType.ERROR_OCCURRED, on_error)
-        self.event_bus.subscribe(EventType.STATE_CHANGED, on_state_change)
-        self.event_bus.subscribe(EventType.UI_ACTION, on_ui_action)
+        self.event_bus.subscribe(EventType.ERROR_OCCURRED, on_error_occurred)
+        self.event_bus.subscribe(EventType.STATE_CHANGED, on_state_changed)
+
+        # Пример подписки на UI_ACTION (если нужно):
+        # def on_ui_action(event: Event) -> None:
+        #     """Обработчик событий UI_ACTION."""
+        #     # Вызвать какие-то UI-действия или бизнес-логику
+        #     pass
+        # self.event_bus.subscribe(EventType.UI_ACTION, on_ui_action)
+
+    def on_closing(self) -> None:
+        """Вызывается при закрытии окна (например, по кнопке 'X').
+
+        Останавливает ядро (core.stop()) и уничтожает текущее окно.
+        """
+
+        # Логируем факт закрытия
+        self.logger.info("Application is closing...")
+
+        # (Опционально) спрашиваем подтверждение
+        if not mb.askokcancel("Выход", "Точно хотите закрыть приложение?"):
+            return
+
+        # Сохраняем настройки (если что-то меняли)
+        self.settings_manager.save()
+
+        # Останавливаем ядро (и ждём, пока поток завершится)
+        self.core.stop()
+        if self.core._worker_thread is not None and self.core._worker_thread.is_alive():
+            self.core._worker_thread.join(timeout=2)
+
+        # Очистка других ресурсов (файлы, соединения)
+        # close_all_files() ...
+        # db_connection.close() ...
+
+        # Закрываем окно
+        self.destroy()
 
     def setup_ui(self) -> None:
-        """Инициализация и настройка всех компонентов интерфейса.
+        """Создаёт и конфигурирует все основные UI-компоненты.
 
-        Метод создает и размещает все основные компоненты пользовательского
-        интерфейса, включая навигационную панель, меню действий, фреймы
-        результатов и логов.
-
-        Аргументы:
-            Нет
-
-        Возвращает:
-            None
-
-        Пример использования:
-            app = ModernApp()
-            app.setup_ui()
+        Включает:
+        - Фрейм навигации (SideBarFrame)
+        - Фрейм меню действий (ActionMenuFrame)
+        - Фрейм результатов (ResultFrame)
+        - Фрейм логов (LogFrame)
         """
         # Конфигурация сетки
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
         self.grid_columnconfigure(2, weight=2)
 
-        # Создание фрейма навигации
+        # Фрейм навигации
         self.navigation_frame = SideBarFrame(self)
         self.navigation_frame.grid(row=0, column=0, rowspan=2, sticky="nsew")
 
-        # Configure column weights for proper layout
-        self.grid_columnconfigure(1, weight=0)  # Action menu column
-        self.grid_columnconfigure(2, weight=1)  # Result frame column
+        # Колонки для экшен-меню и result
+        self.grid_columnconfigure(1, weight=0)
+        self.grid_columnconfigure(2, weight=1)
 
-        # Создание фрейма меню действий
+        # Фрейм меню действий
         self.action_menu = ActionMenuFrame(
             self,
             {
@@ -170,19 +224,19 @@ class ModernApp(ctk.CTk):
                 "count_unique_offers": self.count_unique_offers,
                 "compare_prices": self.compare_prices,
             },
-            width=200,  # Set fixed width for action menu
+            width=200,
         )
         self.action_menu.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
 
-        # Создание фрейма результатов
+        # Фрейм результатов
         self.result_frame = ResultFrame(self)
         self.result_frame.grid(row=0, column=2, sticky="nsew", padx=20, pady=20)
 
-        # Создание фрейма логов
+        # Фрейм логов
         self.log_frame = LogFrame(self)
         self.log_frame.grid(row=1, column=1, columnspan=2, sticky="nsew", padx=20, pady=(0, 20))
 
-        # Настройка обработчиков навигации
+        # Настройка навигационных кнопок
         self.navigation_frame.set_button_commands(
             self.show_json_tab,
             self.show_image_tab,
@@ -190,79 +244,27 @@ class ModernApp(ctk.CTk):
             self.change_appearance_mode,
         )
 
-        # Показать начальный фрейм
+        # Показ начального фрейма
         self.select_frame_by_name("json")
 
     def show_json_tab(self) -> None:
-        """Переключение на вкладку операций с JSON.
-
-        Активирует вкладку JSON и обновляет интерфейс для отображения
-        соответствующих элементов управления.
-
-        Аргументы:
-            Нет
-
-        Возвращает:
-            None
-
-        Пример использования:
-            app = ModernApp()
-            app.show_json_tab()
-        """
+        """Переключается на вкладку операций с JSON."""
         self.select_frame_by_name("json")
 
     def show_image_tab(self) -> None:
-        """Переключение на вкладку операций с изображениями.
-
-        Активирует вкладку изображений и обновляет интерфейс для отображения
-        соответствующих элементов управления.
-
-        Аргументы:
-            Нет
-
-        Возвращает:
-            None
-
-        Пример использования:
-            app = ModernApp()
-            app.show_image_tab()
-        """
+        """Переключается на вкладку операций с изображениями."""
         self.select_frame_by_name("image")
 
     def show_analysis_tab(self) -> None:
-        """Переключение на вкладку анализа.
-
-        Активирует вкладку анализа и обновляет интерфейс для отображения
-        соответствующих элементов управления.
-
-        Аргументы:
-            Нет
-
-        Возвращает:
-            None
-
-        Пример использования:
-            app = ModernApp()
-            app.show_analysis_tab()
-        """
+        """Переключается на вкладку анализа."""
         self.select_frame_by_name("analysis")
 
     def change_appearance_mode(self, new_appearance_mode: str) -> None:
-        """Изменение темы приложения.
+        """Изменяет текущую тему приложения.
 
-        Изменяет текущую тему оформления приложения на основе
-        выбранного пользователем значения.
-
-        Аргументы:
-            new_appearance_mode: Новое название темы на русском языке
-                               ('Светлая', 'Тёмная' или 'Системная')
-
-        Возвращает:
-            None
-
-        Пример использования:
-            app = ModernApp()
-            app.change_appearance_mode('Тёмная')
+        Args:
+            new_appearance_mode (str): Новое название темы на русском языке
+                ('Светлая', 'Тёмная', 'Системная').
         """
         mode_map = {"Светлая": "light", "Тёмная": "dark", "Системная": "system"}
         theme = mode_map[new_appearance_mode]
@@ -270,26 +272,13 @@ class ModernApp(ctk.CTk):
         self.settings_manager.set_theme(theme)
 
     def select_frame_by_name(self, name: str) -> None:
-        """Показать выбранный фрейм содержимого и обновить состояние навигации.
+        """Отображает выбранный фрейм содержимого и очищает лог/result фреймы.
 
-        Обновляет интерфейс для отображения выбранного фрейма и
-        соответствующих элементов управления, а также очищает
-        фреймы результатов и логов.
-
-        Аргументы:
-            name: Имя фрейма для отображения ('json', 'image' или 'analysis')
-
-        Возвращает:
-            None
-
-        Пример использования:
-            app = ModernApp()
-            app.select_frame_by_name('json')
+        Args:
+            name (str): Имя фрейма для отображения ('json', 'image', 'analysis').
         """
-        # Update navigation frame state and buttons
         self.navigation_frame.select_tab(name)
 
-        # Update action menu sections
         if name == "json":
             self.action_menu.show_json_section()
         elif name == "image":
@@ -297,27 +286,30 @@ class ModernApp(ctk.CTk):
         elif name == "analysis":
             self.action_menu.show_analysis_section()
 
-        # Clear result and log frames
         self.result_frame.clear()
         self.log_frame.clear_log()
 
     def _handle_error(self, error: Exception, operation: str) -> None:
-        """Unified error handling for all operations.
+        """Обрабатывает ошибку, возникшую при выполнении конкретной операции.
 
-        Аргументы:
-            error: Возникшее исключение
-            operation: Название операции, в которой произошла ошибка
+        Args:
+            error (Exception): Возникшее исключение.
+            operation (str): Название операции, при выполнении которой произошла ошибка.
         """
         error_msg = f"Ошибка при {operation}: {str(error)}"
         self.log_frame.log(error_msg)
         mb.showerror("Ошибка", error_msg)
 
-    def _track_progress(self, total_items: int, operation: str) -> None:
-        """Unified progress tracking for long-running operations.
+    def _track_progress(self, total_items: int, operation: str):
+        """Создаёт функцию обновления прогресса для длительных операций.
 
-        Аргументы:
-            total_items: Общее количество элементов для обработки
-            operation: Название текущей операции
+        Args:
+            total_items (int): Общее количество элементов для обработки.
+            operation (str): Название операции.
+
+        Returns:
+            Callable[[int, str], None]: Функция, принимающая текущий индекс
+            обработки и необязательное сообщение, и обновляющая прогресс.
         """
 
         def update(current: int, message: str = "") -> None:
@@ -327,7 +319,7 @@ class ModernApp(ctk.CTk):
         return update
 
     def extract_addresses(self) -> None:
-        """Извлечение и сохранение адресов из JSON файлов."""
+        """Извлекает и сохраняет адреса из выбранных JSON-файлов."""
         try:
             files = fd.askopenfilenames(filetypes=config.JSON_FILE_TYPES)
             if not files:
@@ -351,24 +343,25 @@ class ModernApp(ctk.CTk):
                     return addresses
                 return []
 
-            self.core.handle_task(
-                task,
-                description="Извлечение адресов",
-                on_complete=lambda result: (
-                    self.result_frame.show_text("\n".join(result)) if result else None,
-                    (
-                        self.log_frame.log("Адреса успешно извлечены!")
-                        if result
-                        else self.log_frame.log("Адреса не найдены")
-                    ),
-                ),
-            )
+            # self.core.handle_task(
+            #     task,
+            #     description="Извлечение адресов",
+            #     on_complete=lambda result: (
+            #         self.result_frame.show_text("\n".join(result)) if result else None,
+            #         (
+            #             self.log_frame.log("Адреса успешно извлечены!")
+            #             if result
+            #             else self.log_frame.log("Адреса не найдены")
+            #         ),
+            #     ),
+            # )
+            self.core.add_task(task)
 
         except Exception as e:
             self._handle_error(e, "извлечении адресов")
 
     def compress_images(self) -> None:
-        """Обработка и сжатие выбранных изображений."""
+        """Сжимает выбранные изображения и архивирует результат."""
         try:
             files = fd.askopenfilenames(filetypes=config.IMAGE_FILE_TYPES)
             if not files:
@@ -380,7 +373,6 @@ class ModernApp(ctk.CTk):
             output_dir.mkdir(exist_ok=True)
 
             processed_files = ImageProcessor.compress_multiple_images(list(files), str(output_dir))
-
             archive_path = config.get_archive_path()
             create_archive(processed_files, archive_path)
             shutil.rmtree(output_dir)
@@ -391,7 +383,7 @@ class ModernApp(ctk.CTk):
             self._handle_error(e, "сжатии изображений")
 
     def check_coordinates(self) -> None:
-        """Проверка и отчет о соответствии адресов и координат."""
+        """Проверяет и формирует отчёт о соответствии адресов и координат."""
         try:
             files = fd.askopenfilenames(filetypes=config.JSON_FILE_TYPES)
             if not files:
@@ -438,21 +430,7 @@ class ModernApp(ctk.CTk):
             self.reset_progress()
 
     def extract_barcodes(self) -> None:
-        """Извлечение и сохранение штрих-кодов из JSON файлов.
-
-        Загружает выбранные JSON файлы, извлекает штрих-коды и
-        сохраняет их в CSV файл.
-
-        Аргументы:
-            Нет
-
-        Возвращает:
-            None
-
-        Пример использования:
-            app = ModernApp()
-            app.extract_barcodes()
-        """
+        """Извлекает штрих-коды из выбранных JSON-файлов и сохраняет в CSV."""
         files = fd.askopenfilenames(filetypes=config.JSON_FILE_TYPES)
         if not files:
             self.log_frame.log("Пожалуйста, выберите JSON файл(ы)")
@@ -498,21 +476,7 @@ class ModernApp(ctk.CTk):
             self.log_frame.log("Процесс завершен")
 
     def write_test_json(self) -> None:
-        """Создание тестового JSON файла из выбранного файла.
-
-        Загружает выбранный JSON файл, создает на его основе тестовый
-        файл и сохраняет результат.
-
-        Аргументы:
-            Нет
-
-        Возвращает:
-            None
-
-        Пример использования:
-            app = ModernApp()
-            app.write_test_json()
-        """
+        """Создаёт тестовый JSON-файл из выбранного JSON."""
         files = fd.askopenfilenames(filetypes=config.JSON_FILE_TYPES)
         if len(files) != 1:
             mb.showinfo("Информация", "Пожалуйста, выберите один JSON файл")
@@ -521,35 +485,24 @@ class ModernApp(ctk.CTk):
         self.log_frame.log("Начало создания тестового JSON...")
         self.log_frame.log(f"Обработка файла: {Path(files[0]).name}")
 
-        data = load_json_file(files[0])
-        json_file = create_test_json(data)
+        try:
+            data = load_json_file(files[0])
+            json_file = create_test_json(data)
 
-        output_path = config.get_unique_filename(Path(files[0]).stem, config.TEST_JSON_SUFFIX, ".json")
-        with open(output_path, "w", encoding="utf-8") as outfile:
-            json_content = json.dumps(json_file, ensure_ascii=False, indent=2)
-            json.dump(json_file, outfile, ensure_ascii=False, indent=2)
-            self.result_frame.show_text(json_content)
+            output_path = config.get_unique_filename(Path(files[0]).stem, config.TEST_JSON_SUFFIX, ".json")
+            with open(output_path, "w", encoding="utf-8") as outfile:
+                json_content = json.dumps(json_file, ensure_ascii=False, indent=2)
+                json.dump(json_file, outfile, ensure_ascii=False, indent=2)
+                self.result_frame.show_text(json_content)
 
-        self.log_frame.log(f"Тестовый JSON сохранен в файл: {output_path}")
-        self.log_frame.log("Операция успешно завершена!")
-        mb.showinfo("Успех", "Тестовый JSON успешно создан!")
+            self.log_frame.log(f"Тестовый JSON сохранен в файл: {output_path}")
+            self.log_frame.log("Операция успешно завершена!")
+            mb.showinfo("Успех", "Тестовый JSON успешно создан!")
+        except Exception as exc:
+            self._handle_error(exc, "создании тестового JSON")
 
     def convert_image_format(self) -> None:
-        """Конвертация изображений в формат PNG.
-
-        Загружает выбранные изображения и конвертирует их в формат PNG,
-        сохраняя результаты в отдельную директорию.
-
-        Аргументы:
-            Нет
-
-        Возвращает:
-            None
-
-        Пример использования:
-            app = ModernApp()
-            app.convert_image_format()
-        """
+        """Конвертирует выбранные изображения в формат PNG."""
         files = fd.askopenfilenames(filetypes=config.IMAGE_FILE_TYPES)
         if not files:
             mb.showinfo("Информация", "Пожалуйста, выберите файл(ы) изображений")
@@ -570,21 +523,7 @@ class ModernApp(ctk.CTk):
         mb.showinfo("Успех", "Изображения успешно конвертированы!")
 
     def count_unique_offers(self) -> None:
-        """Подсчет и отображение статистики уникальных предложений.
-
-        Анализирует выбранные JSON файлы и подсчитывает количество
-        уникальных предложений, отображая результаты в диалоговом окне.
-
-        Аргументы:
-            Нет
-
-        Возвращает:
-            None
-
-        Пример использования:
-            app = ModernApp()
-            app.count_unique_offers()
-        """
+        """Подсчитывает количество уникальных предложений в JSON-файлах."""
         files = fd.askopenfilenames(filetypes=config.JSON_FILE_TYPES)
         if not files:
             mb.showinfo("Информация", "Пожалуйста, выберите JSON файл(ы)")
@@ -610,7 +549,7 @@ class ModernApp(ctk.CTk):
             self.update_progress(90, "Подсчет итоговых результатов...")
             unique_count = len(unique_descriptions)
 
-            result_message = f"Всего предложений: {total_count}\nУникальных предложений: {unique_count}"
+            result_message = f"Всего предложений: {total_count}\n" f"Уникальных предложений: {unique_count}"
             self.log_frame.log("Анализ завершен.")
             self.log_frame.log(result_message)
             self.result_frame.show_text(result_message)
@@ -624,21 +563,7 @@ class ModernApp(ctk.CTk):
             self.update_progress(0)
 
     def compare_prices(self) -> None:
-        """Анализ и визуализация разницы в ценах.
-
-        Загружает выбранные JSON файлы, анализирует разницу в ценах
-        и создает визуализацию результатов.
-
-        Аргументы:
-            Нет
-
-        Возвращает:
-            None
-
-        Пример использования:
-            app = ModernApp()
-            app.compare_prices()
-        """
+        """Анализирует и визуализирует различия цен в выбранных JSON-файлах."""
         files = fd.askopenfilenames(filetypes=config.JSON_FILE_TYPES)
         if not files:
             self.log_frame.log("Пожалуйста, выберите JSON файл(ы)")
@@ -701,15 +626,15 @@ class ModernApp(ctk.CTk):
             self.log_frame.log("Процесс завершен")
 
     def update_progress(self, progress: int, message: str = "") -> None:
-        """Update the progress indicator and message in the result frame.
+        """Обновляет индикатор прогресса и сообщение в фрейме результатов.
 
         Args:
-            progress: Progress percentage (0-100)
-            message: Optional status message to display
+            progress (int): Процент выполнения (0..100).
+            message (str, optional): Статусное сообщение для отображения.
         """
         self.result_frame.update_progress(progress, message)
         self.log_frame.log(message)
 
     def reset_progress(self) -> None:
-        """Reset the progress indicator to its initial state."""
+        """Сбрасывает индикатор прогресса в исходное состояние."""
         self.result_frame.reset_progress()

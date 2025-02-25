@@ -8,12 +8,12 @@ def extract_addresses(data: dict[str, Any], event_bus=None) -> list[str]:
     target_regions или target_shops. Если target_regions отсутствует или пуст,
     используется первый адрес из target_shops.
 
-    Аргументы:
+    Args:
         data (Dict[str, Any]): Словарь с данными каталога, содержащий поля
             'catalogs' с вложенными полями 'target_regions' и 'target_shops'
         event_bus (Optional[EventBus]): Шина событий для отправки обновлений прогресса
 
-    Возвращает:
+    Returns:
         List[str]: Список извлеченных адресов
 
     Пример использования:
@@ -59,10 +59,10 @@ def extract_addresses(data: dict[str, Any], event_bus=None) -> list[str]:
 def check_coordinates_match(data: dict[str, Any]) -> tuple[list[str], int, int, int]:
     """Проверить соответствие между адресами и координатами.
 
-    Аргументы:
+    Args:
         data: Словарь, содержащий каталоги и координаты магазинов
 
-    Возвращает:
+    Returns:
         Кортеж, содержащий:
         - Список адресов без координат
         - Общее количество каталогов
@@ -135,10 +135,10 @@ def extract_barcodes(data: dict[str, Any]) -> list[str]:
 def count_unique_offers(data: dict[str, Any]) -> tuple[int, int]:
     """Подсчитать общее количество и уникальные предложения.
 
-    Аргументы:
+    Args:
         data: Словарь, содержащий данные предложений
 
-    Возвращает:
+    Returns:
         Кортеж, содержащий общее количество и количество уникальных предложений
 
     Исключения:
@@ -190,10 +190,10 @@ def create_test_json(data: dict[str, Any]) -> dict[str, Any]:
 def analyze_price_differences(data: dict[str, Any]) -> tuple[list[float], int, int]:
     """Анализ разницы цен в предложениях.
 
-    Аргументы:
+    Args:
         data: Словарь, содержащий данные предложений
 
-    Возвращает:
+    Returns:
         Кортеж, содержащий:
         - Список разниц в ценах
         - Количество товаров с разными ценами
