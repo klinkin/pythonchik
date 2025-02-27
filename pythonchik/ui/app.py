@@ -31,7 +31,7 @@ from pythonchik.services import (
     extract_addresses,
     extract_barcodes,
 )
-from pythonchik.ui.frames import ActionMenuFrame, LogFrame, ResultFrame, SideBarFrame
+from pythonchik.ui.frames import ActionMenuFrame, LogFrame, ResultFrame, SideBarFrame, StatusFrame
 from pythonchik.utils import (
     create_archive,
     load_json_file,
@@ -175,7 +175,7 @@ class ModernApp(ctk.CTk):
             return
 
         # Сохраняем настройки (если что-то меняли)
-        self.settings_manager.save()
+        self.settings_manager.save_settings()
 
         # Останавливаем ядро (и ждём, пока поток завершится)
         self.core.stop()
@@ -234,7 +234,11 @@ class ModernApp(ctk.CTk):
 
         # Фрейм логов
         self.log_frame = LogFrame(self)
-        self.log_frame.grid(row=1, column=1, columnspan=2, sticky="nsew", padx=20, pady=(0, 20))
+        self.log_frame.grid(row=1, column=1, columnspan=2, sticky="nsew", padx=20, pady=(0, 10))
+
+        # Фрейм статуса
+        self.status_frame = StatusFrame(self, self.event_bus)
+        self.status_frame.grid(row=2, column=0, columnspan=3, sticky="ew", padx=20, pady=(0, 10))
 
         # Настройка навигационных кнопок
         self.navigation_frame.set_button_commands(

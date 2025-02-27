@@ -1,14 +1,12 @@
-"""Основная функциональность приложения Pythonchik.
+"""
+Основная функциональность приложения Pythonchik.
 
-Описание:
-    Этот модуль обрабатывает основную логику приложения, управление состоянием
-    и обработку событий, отдельно от компонентов пользовательского интерфейса.
+Это ядро (Core) приложения, обрабатывающее задачи в фоновом потоке, управляет общим состоянием,
+публикует события через EventBus (ошибки, прогресс, смена состояния) и обеспечивает
+потокобезопасный доступ к состоянию.
 
-Note:
-    - Управление состоянием приложения
-    - Система обработки событий
-    - Многопоточное выполнение задач
-    - Обработка ошибок
+Содержит:
+- ApplicationCore: основной класс ядра, с очередью задач, фоновым потоком, handle_error, state-lock.
 """
 
 import logging
@@ -22,58 +20,71 @@ from pythonchik.utils.event_system import Event, EventBus, EventType
 
 
 class ApplicationState(Enum):
-    """Перечисление возможных состояний приложения.
+    """Состояния приложения.
 
-    Определяет все возможные состояния, в которых может находиться приложение.
+    Attributes:
+        INITIALIZING: Начальная загрузка приложения.
+        IDLE: Готово к работе, нет активных фоновых задач.
+        PROCESSING: Идёт обработка задач.
+        WAITING: Ожидание внешних ресурсов/сервисов.
+        ERROR: Приложение перешло в состояние ошибки.
+        READY: Приложение готово к работе.
+        PAUSED: Приостановка обработки.
+        SHUTTING_DOWN: Завершение работы приложения.
     """
 
-    INITIALIZING = "initializing"  # Начальная загрузка приложения
-    IDLE = "idle"  # Приложение готово к работе
-    PROCESSING = "processing"  # Обработка задач
-    WAITING = "waiting"  # Ожидание ответа от внешних сервисов
-    ERROR = "error"  # Состояние ошибки
-    READY = "ready"  # Готовность к работе
-    PAUSED = "paused"  # Временная приостановка обработки
-    SHUTTING_DOWN = "shutting_down"  # Завершение работы приложения
+    INITIALIZING = "initializing"
+    IDLE = "idle"
+    PROCESSING = "processing"
+    WAITING = "waiting"
+    ERROR = "error"
+    READY = "ready"
+    PAUSED = "paused"
+    SHUTTING_DOWN = "shutting_down"
 
 
 class ApplicationCore:
-    """Обработчик основной функциональности приложения.
+    """Основное ядро приложения.
 
-    Это ядро приложения. Оно управляет очередью задач, фоновым потоком и общим
-    состоянием приложения. Также отвечает за публикацию событий об ошибках,
-    прогрессе выполнения и смене состояния, используя `EventBus`.
+    Управляет:
+    - Очередью фоновых задач (`_processing_queue`),
+    - Потоком-воркером (`_worker_thread`),
+    - Общим состоянием (`_state`),
+    - Публикует события (ERROR_OCCURRED, TASK_COMPLETED, STATE_CHANGED) через EventBus.
+
+    Note:
+        - Потокобезопасность достигается через `_state_lock`.
+        - Не держим `_state_lock` во время `event_bus.publish(...)`, избегая взаимной блокировки.
     """
 
     def __init__(self, event_bus: EventBus) -> None:
         """Инициализирует ядро приложения.
 
         Args:
-            event_bus (EventBus): Экземпляр шины событий для публикации уведомлений
-                о состоянии, ошибках и т.п.
-
-        Note:
-            Начальное состояние приложения устанавливается в `ApplicationState.IDLE`.
+            event_bus (EventBus): Шина событий, куда будем публиковать события.
         """
         self.logger = logging.getLogger("pythonchik.core")
         self.event_bus = event_bus
 
+        # Очередь для фоновых задач, очередь для ошибок
         self._processing_queue = queue.Queue()
         self._error_queue = queue.Queue()
-        self._worker_thread: Optional[threading.Thread] = None
 
+        # Рабочий поток + состояние
+        self._worker_thread: Optional[threading.Thread] = None
         self._is_running = False
+
+        # Лок + текущее состояние
         self._state_lock = threading.Lock()
         self._state = ApplicationState.IDLE
 
         self.logger.info("ApplicationCore инициализирован.")
 
     def start(self) -> None:
-        """Запускает фоновый поток для обработки очереди задач.
+        """Запускает фоновый поток для обработки `_processing_queue`.
 
-        Если поток уже запущен, повторный вызов игнорируется. При первом вызове
-        устанавливает флаг `_is_running` в True, создаёт новый поток и начинает
-        бесконечно обрабатывать задачи из очереди `_processing_queue`.
+        Если уже запущено, повторный вызов игнорируется.
+        Устанавливает `_is_running = True` и крутит `_process_tasks()` до stop().
         """
         if not self._is_running:
             self.logger.info("Запуск фонового потока...")
@@ -81,17 +92,19 @@ class ApplicationCore:
             self._worker_thread = threading.Thread(target=self._process_tasks, daemon=True)
             self._worker_thread.start()
             self.logger.info("Фоновый поток успешно запущен.")
+        else:
+            self.logger.warning("Попытка повторного запуска — поток уже работает.")
 
     def stop(self) -> None:
-        """Останавливает фоновый поток.
+        """Останавливает фоновый поток, ожидает завершения.
 
-        Устанавливает `_is_running` в False и, если поток ещё активен,
-        дожидается его завершения (join). По окончании выводит лог-сообщение
-        о том, что ядро остановлено.
+        Ставит `_is_running = False`, кладёт None в очередь для разблокировки,
+        ждёт join.
         """
         self.logger.info("Попытка остановки фонового потока...")
         self._is_running = False
-        self._processing_queue.put(None)  # Разблокируем очередь, если она пустая
+        # Разблокируем очередь, если она пуста
+        self._processing_queue.put(None)
         if self._worker_thread and self._worker_thread.is_alive():
             self._worker_thread.join(timeout=2)
             self.logger.info("Фоновый поток остановлен.")
@@ -99,53 +112,40 @@ class ApplicationCore:
             self.logger.warning("Фоновый поток уже был остановлен.")
 
     def handle_error(self, error: Exception, error_context: ErrorContext) -> None:
-        """Обрабатывает ошибку, возникшую во время выполнения задачи.
-
-        Кладёт сам объект исключения `error` в `_error_queue` и публикует событие
-        `ERROR_OCCURRED` через `event_bus` с подробной информацией из `error_context`.
+        """Обрабатывает ошибку, возникшую во время задачи.
 
         Args:
-            error (Exception): Исключение, которое возникло.
-            error_context (ErrorContext): Дополнительная информация об ошибке.
+            error (Exception): Исключение.
+            error_context (ErrorContext): Доп. инфо об ошибке.
 
-        Note:
-            В дальнейшем ошибки из `_error_queue` могут быть обработаны другими
-            компонентами, используя метод `process_background_tasks`.
+        Публикует событие ERROR_OCCURRED, кладёт ошибку в _error_queue.
         """
         self.logger.error(f"Ошибка в обработке задачи: {error}", exc_info=True)
         self._error_queue.put(error)
         self.event_bus.publish(
-            Event(EventType.ERROR_OCCURRED, {"error": str(error), "context": error_context})
+            Event(EventType.ERROR_OCCURRED, data={"error": str(error), "context": error_context})
         )
 
     def _process_tasks(self, task: Optional[Callable[[], Any]] = None) -> None:
-        """Основной метод обработки задач в рабочем потоке.
+        """Фоновая обработка задач в рабочем потоке.
 
-        Если `task` не равен None, метод синхронно выполняет переданную задачу
-        (без входа в цикл ожидания). В противном случае — непрерывно обрабатывает
-        задачи из `_processing_queue`, пока `_is_running = True`.
+        Если task передан, обрабатываем только этот task (синхронно),
+        иначе — бесконечный цикл, пока `_is_running`.
 
         Args:
-            task (Callable[[], Any], optional): Конкретная задача для
-                разового выполнения. Если не указана, запускается бесконечная
-                обработка очереди.
-
-        Raises:
-            Exception: Если во время выполнения задачи произошла ошибка,
-                она обрабатывается методом `handle_error`.
+            task (Optional[Callable]): конкретная задача для единовременной обработки.
         """
         self.logger.info("Фоновый поток начал обработку задач.")
 
         if task:
-            self.logger.info("Запущена синхронная обработка задачи.")
-            with self._state_lock:
-                self._update_state(ApplicationState.PROCESSING)
+            self.logger.info("Запущена синхронная обработка задачи (handle_task).")
+            self._set_state(ApplicationState.PROCESSING)
             try:
                 result = task()
                 self.logger.info("Синхронная задача выполнена успешно.")
                 self.event_bus.publish(Event(EventType.TASK_COMPLETED, {"result": result}))
             except Exception as exc:
-                self.logger.exception("Ошибка при выполнении задачи.")
+                self.logger.exception("Ошибка при выполнении задачи (handle_task).")
                 self.handle_error(
                     exc,
                     ErrorContext(
@@ -155,40 +155,28 @@ class ApplicationCore:
                     ),
                 )
             finally:
-                with self._state_lock:
-                    if self._processing_queue.empty():
-                        self._update_state(ApplicationState.IDLE)
+                if self._processing_queue.empty() and self.state != ApplicationState.ERROR:
+                    self._set_state(ApplicationState.IDLE)
             return
 
-        # Process queue in a loop
+        # Бесконечная обработка очереди, пока _is_running = True
         while self._is_running:
             try:
-                task = None
-                try:
-                    self.logger.debug("Фоновый поток проверяет очередь...")
-                    task = self._processing_queue.get(timeout=0.5)
-                    if task is None:
-                        self.logger.info("Получен сигнал завершения потока.")
-                        break  # Выход из цикла
+                self.logger.debug("Фоновый поток проверяет очередь...")
+                got_task = self._processing_queue.get(timeout=0.5)
+                if got_task is None:
+                    self.logger.info("Получен сигнал завершения потока (None).")
+                    break
 
-                    self.logger.info("Получена новая задача из очереди.")
-
-                except queue.Empty:
-                    # Нет задач в очереди в данный момент
-                    self.logger.debug("Очередь пуста, ожидаем задачи...")
-                    continue
-
-                self.logger.debug("⏳ Беру лок в _process_tasks для обновления состояния")
-                with self._state_lock:
-                    self.logger.debug("✅ Лок взят в _process_tasks, обновляю состояние")
-                    self._update_state(ApplicationState.PROCESSING)
+                self.logger.info("Получена новая задача из очереди.")
+                self._set_state(ApplicationState.PROCESSING)
 
                 try:
-                    result = task()
+                    result = got_task()
                     self.logger.info("Задача успешно выполнена.")
                     self.event_bus.publish(Event(EventType.TASK_COMPLETED, {"result": result}))
                 except Exception as exc:
-                    self.logger.exception("Ошибка в задаче.")
+                    self.logger.exception("Ошибка в задаче (фоновая).")
                     self.handle_error(
                         exc,
                         ErrorContext(
@@ -199,14 +187,13 @@ class ApplicationCore:
                     )
                 finally:
                     self._processing_queue.task_done()
-                    self.logger.debug("⏳ Беру лок в _process_tasks перед обновлением состояния")
-                    with self._state_lock:
-                        self.logger.debug(
-                            "✅ Лок взят в _process_tasks, обновляю состояние после выполнения задачи"
-                        )
-                        if self._processing_queue.empty() and self._state != ApplicationState.ERROR:
-                            self._update_state(ApplicationState.IDLE)
 
+                # После выполнения: если очередь пуста, выходим в IDLE (если нет ошибки)
+                if self._processing_queue.empty() and self.state != ApplicationState.ERROR:
+                    self._set_state(ApplicationState.IDLE)
+
+            except queue.Empty:
+                self.logger.debug("Очередь пуста, ожидаем задачи...")
             except Exception as e:
                 self.logger.exception("Ошибка в основном цикле фонового потока.")
                 self.handle_error(
@@ -218,129 +205,93 @@ class ApplicationCore:
                     ),
                 )
 
-    def _update_state(self, new_state: ApplicationState) -> None:
-        """Атомарно обновляет текущее состояние приложения и публикует событие.
+    def _set_state(self, new_state: ApplicationState) -> None:
+        """Устанавливает состояние, без публикации STATE_CHANGED.
 
-        Args:
-            new_state (ApplicationState): Новое состояние приложения.
-
-        Note:
-            Блокировка `_state_lock` используется для безопасного обновления `_state`.
-            После смены состояния публикуется событие `STATE_CHANGED` с новым
-            состоянием, чтобы внешние компоненты могли отреагировать.
+        Только внутренний метод! Если нужно оповещение, вызывайте _update_state().
         """
-        self.logger.debug(f"⏳ Беру лок в _update_state (новое состояние: {new_state})")
         with self._state_lock:
-            self.logger.debug(f"✅ Лок взят в _update_state, обновляю состояние на {new_state}")
-            self.logger.info(f"Смена состояния: {self._state} → {new_state}")
+            old_state = self._state
+            self.logger.info(f"Смена состояния: {old_state} -> {new_state}")
             self._state = new_state
 
-        self.logger.debug(f"📢 Публикую событие STATE_CHANGED после выхода из лока ({new_state})")
-        self.event_bus.publish(Event(EventType.STATE_CHANGED, {"state": new_state}))
+    def _update_state(self, new_state: ApplicationState) -> None:
+        """Меняет состояние и публикует событие STATE_CHANGED, без лока во время publish.
+
+        Args:
+            new_state (ApplicationState): Новое состояние.
+        """
+        # 1) Меняем состояние под локом
+        with self._state_lock:
+            old_state = self._state
+            self.logger.info(f"Смена состояния: {old_state} -> {new_state}")
+            self._state = new_state
+
+        # 2) Вызываем publish() уже без лока
+        event_data = {"old_state": old_state, "new_state": new_state}
+        self.logger.debug(f"Публикую STATE_CHANGED, old={old_state}, new={new_state}")
+        self.event_bus.publish(Event(EventType.STATE_CHANGED, data=event_data))
 
     @property
     def state(self) -> ApplicationState:
-        """Returns текущее состояние приложения.
+        """Текущее состояние приложения.
 
         Returns:
-            ApplicationState: Значение из перечисления, отражающее состояние.
+            ApplicationState: внутреннее состояние.
         """
         with self._state_lock:
             return self._state
 
     def add_task(self, task: Callable[[], Any]) -> None:
-        """Добавляет задачу в очередь для фоновой обработки.
-
-        Оборачивает задачу в метод `_wrap_task()` для базовой обработки
-        исключений, после чего кладёт её в `_processing_queue`. Если текущее
-        состояние было `IDLE`, переключается в `PROCESSING`.
+        """Добавляет новую задачу в очередь (фоновую).
 
         Args:
-            task (Callable[[], Any]): Функция, которая будет выполнена
-                в фоновом потоке.
-
-        Note:
-            Задача будет автоматически выполнена в порядке поступления
-            в очередь. Результат её выполнения (или ошибка) будут
-            опубликованы через события `TASK_COMPLETED` или `ERROR_OCCURRED`.
+            task (Callable[[], Any]): функция-задача, будет выполнена в потоке.
         """
         self.logger.info("Добавлена новая задача в очередь.")
-        wrapped_task = self._wrap_task(task)
-        self._processing_queue.put(wrapped_task)
-        with self._state_lock:
-            if self._state == ApplicationState.IDLE:
-                self._update_state(ApplicationState.PROCESSING)
+        wrapped = self._wrap_task(task)
+        self._processing_queue.put(wrapped)
+        # Если мы в IDLE, переключаемся в PROCESSING
+        if self.state == ApplicationState.IDLE:
+            self._set_state(ApplicationState.PROCESSING)
 
     def _wrap_task(self, task: Callable[[], Any]) -> Callable[[], Any]:
-        """Оборачивает задачу для базовой обработки исключений.
-
-        Если в процессе выполнения задачи произойдёт ошибка, метод отправляет
-        событие `ERROR_OCCURRED`.
-
-        Args:
-            task (Callable[[], Any]): Исходная функция-задача.
-
-        Returns:
-            Callable[[], Any]: Обёрнутая задача с обработкой исключений.
-        """
+        """Оборачивает задачу, добавляя лог/события ERROR_OCCURRED при исключении."""
 
         def wrapped_task():
             try:
                 return task()
             except Exception as e:
-                self.logger.exception("Ошибка в задаче.")
+                self.logger.exception("Ошибка в задаче (wrapped).")
                 self.event_bus.publish(Event(EventType.ERROR_OCCURRED, {"error": str(e)}))
                 raise
 
         return wrapped_task
 
     def _wrap_task_with_progress(self, task: Callable[[], Any], description: str = "") -> Callable[[], Any]:
-        """Оборачивает задачу для отслеживания прогресса выполнения.
+        """Оборачивает задачу для отслеживания прогресса.
 
-        Сначала публикует событие `PROGRESS_UPDATED` с прогрессом 0% и
-        сообщением о начале операции, затем выполняет `task()`. По завершении
-        отправляет событие `PROGRESS_UPDATED` с 100% прогресса и событие
-        `TASK_COMPLETED`. При ошибке публикует событие с отрицательным
-        прогрессом (указывает на сбой) и `ERROR_OCCURRED`.
-
-        Args:
-            task (Callable[[], Any]): Исходная задача для выполнения.
-            description (str, optional): Краткое описание операции
-                для удобства отображения. По умолчанию "".
-
-        Returns:
-            Callable[[], Any]: Задача, уже обёрнутая для отслеживания
-            прогресса в ходе выполнения.
+        Публикует PROGRESS_UPDATED(0%) -> выполняет -> PROGRESS_UPDATED(100%)
+        -> TASK_COMPLETED. При исключении PROGRESS_UPDATED(-1), ERROR_OCCURRED.
         """
 
         def wrapped_task():
             try:
                 self.logger.info(f"Начало выполнения задачи: {description}")
-
-                # Начальный прогресс
                 self.event_bus.publish(
                     Event(EventType.PROGRESS_UPDATED, {"progress": 0, "message": f"Начало {description}..."})
                 )
-
                 result = task()
-
-                # Завершение прогресса
                 self.event_bus.publish(
                     Event(
                         EventType.PROGRESS_UPDATED, {"progress": 100, "message": f"{description} завершено"}
                     )
                 )
-
-                # Успешное завершение задачи
                 self.event_bus.publish(Event(EventType.TASK_COMPLETED, {"result": result}))
-
                 self.logger.info(f"Задача завершена успешно: {description}")
                 return result
-
             except Exception as e:
                 self.logger.exception(f"Ошибка в задаче: {description}")
-
-                # При ошибке сообщаем, что прогресс = -1 (или любой условный признак сбоя)
                 self.event_bus.publish(
                     Event(EventType.PROGRESS_UPDATED, {"progress": -1, "message": f"Ошибка: {str(e)}"})
                 )
@@ -355,96 +306,67 @@ class ApplicationCore:
         description: str = "",
         on_complete: Optional[Callable[[Any], None]] = None,
     ) -> None:
-        """Синхронно обрабатывает задачу с уведомлениями о прогрессе.
-
-        Обернёт задачу `task` в `_wrap_task_with_progress` и выполнит
-        её синхронно вызовом `_process_tasks(wrapped_task)`. По завершении
-        (если не было ошибки) вызовет колбэк `on_complete`.
+        """Синхронно обрабатывает задачу (без очереди).
 
         Args:
-            task (Callable[[], Any]): Функция, выполняющая основную логику.
-            description (str, optional): Описание операции для прогресс-бара.
-            on_complete (Callable[[Any], None], optional): Колбэк, который
-                будет вызван при успешном завершении задачи, и которому
-                передаётся результат.
-
-        Raises:
-            Exception: Любая ошибка внутри `task` будет обработана и
-                опубликована как событие, затем снова проброшена.
-
-        Note:
-            Этот метод НЕ кладёт задачу в очередь, а вызывает `_process_tasks`
-            напрямую, т.е. блокирует текущий поток до завершения задачи.
-            Будьте осторожны, если вызываете его из UI-треда.
+            task: Функция (Callable), выполняющая основную логику.
+            description: Описание для PROGRESS_UPDATED.
+            on_complete: Колбэк, вызываемый при успехе.
         """
-        self.logger.info(f"Поступила задача на обработку: {description}")
+        self.logger.info(f"Поступила задача handle_task: {description}")
 
         def callback_wrapper():
             try:
                 result = task()
                 if on_complete:
                     on_complete(result)
-                self.logger.info(f"Задача '{description}' успешно выполнена.")
+                self.logger.info(f"Задача '{description}' успешно выполнена (handle_task).")
                 return result
             except Exception as e:
-                self.logger.exception(f"Ошибка во время выполнения задачи: {description}")
+                self.logger.exception(f"Ошибка во время handle_task: {description}")
                 self.event_bus.publish(Event(EventType.ERROR_OCCURRED, {"error": str(e)}))
                 raise
 
-        wrapped_task = self._wrap_task_with_progress(callback_wrapper, description)
-        self._process_tasks(wrapped_task)
+        wrapped = self._wrap_task_with_progress(callback_wrapper, description)
+        self._process_tasks(wrapped)
 
     def process_background_tasks(self) -> None:
-        """Обрабатывает фоновые задачи и ошибки в главном потоке.
+        """Вызывается из UI-треда, обрабатывает ошибки в _error_queue и проверяет состояние.
 
-        Этот метод следует вызывать периодически из UI-треда (например, каждые
-        100 мс через `root.after(...)`), чтобы:
-          1. Выгружать ошибки из `_error_queue` и публиковать событие
-             `ERROR_OCCURRED` для каждой найденной ошибки.
-          2. Проверять, пуста ли очередь `_processing_queue`, и обновлять
-             состояние (IDLE/PROCESSING) при необходимости.
-
-        Raises:
-            Exception: Любые сбои, возникшие при чтении очередей, обрабатываются
-                и публикуются в виде события `ERROR_OCCURRED`.
+        - Читает накопленные ошибки из _error_queue, публикует EVENT=ERROR_OCCURRED.
+        - Если очередь пуста, переключаемся в IDLE (если не ERROR).
         """
-        self.logger.debug("Запущена обработка фоновых задач.")
-
+        self.logger.debug("Запущена обработка фоновых задач в UI-треде.")
         try:
-            # Обработка ошибок, накопившихся в _error_queue
+            # Обработка ошибок из _error_queue
             while not self._error_queue.empty():
-                error = self._error_queue.get_nowait()
-                self.logger.warning(f"Обнаружена ошибка в фоне: {error}")
-                self.event_bus.publish(Event(EventType.ERROR_OCCURRED, {"error": str(error)}))
+                err = self._error_queue.get_nowait()
+                self.logger.warning(f"Обнаружена ошибка в фоне: {err}")
+                self.event_bus.publish(Event(EventType.ERROR_OCCURRED, {"error": str(err)}))
                 self._error_queue.task_done()
 
-            # Проверка, пуста ли очередь задач
-            # self.logger.debug("⏳ Беру лок в process_background_tasks")
-            # with self._state_lock:
-            #     self.logger.debug("✅ Лок взят в process_background_tasks, проверяю состояние очереди")
-
+            # Проверяем, пуста ли очередь
             queue_empty = self._processing_queue.empty()
 
+            # Если есть задачи, но мы не в PROCESSING, переключаемся
             if not queue_empty and self.state != ApplicationState.PROCESSING:
-                self.logger.info("Фоновые задачи активны. Переключение в состояние PROCESSING.")
+                self.logger.info("Фоновые задачи активны -> PROCESSING.")
                 self._update_state(ApplicationState.PROCESSING)
             elif queue_empty and self.state == ApplicationState.PROCESSING:
-                self.logger.info("Очередь пуста. Переключение в состояние IDLE.")
+                self.logger.info("Очередь пуста -> IDLE.")
                 self._update_state(ApplicationState.IDLE)
 
         except Exception as e:
-            # Если что-то пошло не так при чтении очередей
-            self.logger.exception("Ошибка при обработке фоновых задач.")
-
-            error_context = ErrorContext(
+            self.logger.exception("Ошибка при process_background_tasks.")
+            error_ctx = ErrorContext(
                 operation="Обработка фоновых задач",
                 details={"error": str(e)},
                 severity=ErrorSeverity.ERROR,
             )
             self.event_bus.publish(
                 Event(
-                    type=EventType.ERROR_OCCURRED,
-                    data={"error": f"Ошибка обработки фоновых задач: {str(e)}", "context": error_context},
+                    EventType.ERROR_OCCURRED,
+                    {"error": f"Ошибка process_background_tasks: {str(e)}", "context": error_ctx},
                 )
             )
             self._update_state(ApplicationState.ERROR)

@@ -1,25 +1,23 @@
-"""Модуль реализации событийно-ориентированной архитектуры.
+"""
+Модуль реализации событийно-ориентированной архитектуры (Event Bus).
 
-Описание:
-    Данный модуль предоставляет реализацию системы событий для приложения,
-    обеспечивая слабую связанность между компонентами через надежную иерархию событий.
-
-Note:
-    - Поддержка приоритетов событий
-    - Асинхронная обработка событий
-    - Типобезопасные обработчики событий
-    - Система обработки ошибок
+Это усовершенствованная версия, которая:
+- Не вызывает подписчиков (обработчики) под локом, снижая риск дедлоков.
+- Использует приоритетную очередь для порядка обработки (EventType хранит приоритет).
+- Предоставляет интерфейс подписки/отписки на события (thread-safe).
+- Поддерживает глобальные обработчики ошибок.
+- Логирует ключевые операции (подписка, отписка, публикация, ошибки).
 
 Пример использования:
     event_bus = EventBus()
-    event_handler = MyEventHandler()
-    event_bus.subscribe(EventType.DATA_UPDATED, event_handler)
-    await event_bus.publish(Event(EventType.DATA_UPDATED, data={"key": "value"}))
+    handler = MyEventHandler()
+    event_bus.subscribe(EventType.DATA_UPDATED, handler)
+    event_bus.publish(Event(EventType.DATA_UPDATED, data={"key": "value"}))
 """
 
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from functools import wraps
 from queue import PriorityQueue
@@ -33,14 +31,10 @@ T = TypeVar("T")
 class EventPriority(Enum):
     """Уровни приоритета событий для определения порядка обработки.
 
-    Описание:
-        Определяет различные уровни приоритета для обработки событий в системе.
-
-    Note:
-        - LOW: Низкий приоритет для некритичных событий
-        - NORMAL: Стандартный приоритет для большинства событий
-        - HIGH: Высокий приоритет для важных событий
-        - CRITICAL: Наивысший приоритет для критических событий
+    LOW: Низкий приоритет для некритичных событий.
+    NORMAL: Стандартный приоритет для большинства событий.
+    HIGH: Высокий приоритет для важных событий.
+    CRITICAL: Наивысший приоритет для критических событий.
     """
 
     LOW = 0
@@ -50,11 +44,7 @@ class EventPriority(Enum):
 
 
 class EventCategory(Enum):
-    """Категории для различных типов событий.
-
-    Описание:
-        Определяет основные категории событий в системе для их логической группировки.
-    """
+    """Категории для различных типов событий."""
 
     SYSTEM = auto()
     DOMAIN = auto()
@@ -63,16 +53,11 @@ class EventCategory(Enum):
 
 
 class EventType(Enum):
-    """Перечисление типов событий приложения с категориями.
+    """Перечисление типов событий с категориями и приоритетами.
 
-    Описание:
-        Определяет все возможные типы событий в системе с их категориями и приоритетами.
-
-    Note:
-        - Системные события: изменение состояния, ошибки, настройки
-        - Доменные события: обновление данных, обработка файлов
-        - События UI: действия пользователя, обновление прогресса
-        - Сетевые события: статус сети
+    Атрибуты:
+        category (EventCategory): Категория события.
+        priority (EventPriority): Приоритет события.
     """
 
     # Системные события
@@ -100,22 +85,14 @@ class EventType(Enum):
 
 @dataclass
 class Event:
-    """Базовый класс события с метаданными и валидацией.
-
-    Описание:
-        Представляет событие в системе с его типом, данными и метаинформацией.
+    """Событие в системе с метаданными и валидацией.
 
     Args:
-        type: Тип события
-        data: Дополнительные данные события (опционально)
-        source: Источник события (опционально)
-        timestamp: Временная метка события (опционально)
-        id: Уникальный идентификатор события (опционально)
-
-    Note:
-        - Автоматическая генерация временной метки
-        - Автоматическая генерация уникального ID
-        - Поддержка сравнения приоритетов
+        type (EventType): Тип события (с приоритетом и категорией).
+        data (Optional[Dict[str, Any]]): Дополнительные данные события.
+        source (Optional[str]): Источник события (например, имя модуля).
+        timestamp (float): Временная метка (по умолчанию time()).
+        id (str): Уникальный идентификатор события (по умолчанию uuid4()).
     """
 
     type: EventType
@@ -123,6 +100,8 @@ class Event:
     source: Optional[str] = None
     timestamp: float = None
     id: str = None
+
+    priority_key: int = field(init=False, repr=False)
 
     def __post_init__(self):
         if self.timestamp is None:
@@ -132,51 +111,55 @@ class Event:
 
             self.id = str(uuid4())
 
-    def __lt__(self, other):
-        return self.type.priority.value > other.type.priority.value
+        # Инвертируем приоритет, чтобы CRITICAL (3) -> -3, что "меньше" для PriorityQueue
+        self.priority_key = -self.type.priority.value
+
+    def __lt__(self, other: "Event") -> bool:
+        """Сравнение приоритетов: более высокий приоритет - 'меньше' для PriorityQueue.
+
+        Если приоритеты одинаковые, сортировка идёт по времени создания (старые первыми).
+        """
+        if self.priority_key == other.priority_key:
+            return self.timestamp < other.timestamp  # FIFO для одинаковых приоритетов
+        return self.priority_key < other.priority_key  # CRITICAL (-3) -> LOW (0)
 
 
 class EventHandler(ABC, Generic[T]):
-    """Абстрактный базовый класс для обработчиков событий с типобезопасностью.
+    """Абстрактный класс для обработчиков событий с поддержкой типизации.
 
-    Описание:
-        Определяет интерфейс для обработчиков событий с поддержкой типизации.
-
-    Note:
-        - Типобезопасность через Generic[T]
-        - Абстрактный метод handle для реализации
+    Наследуйтесь от него и реализуйте метод handle(event).
     """
 
     def __init__(self):
-        self.event_type = None
+        self.event_type = None  # Для дополнительной валидации, если нужно.
 
     @abstractmethod
     def handle(self, event: Event) -> Optional[T]:
+        """Основной метод обработки события.
+
+        Args:
+            event (Event): Событие для обработки.
+
+        Returns:
+            Optional[T]: Результат обработки, если есть.
+        """
         pass
 
 
 class EventBus:
-    """Центральный компонент управления событиями с приоритетной очередью и восстановлением после ошибок.
+    """Центральный компонент управления событиями с приоритетной очередью.
 
-    Описание:
-        Реализует паттерн Event Bus для управления событиями в приложении.
-
-    Note:
-        - Синглтон для глобального доступа
-        - Приоритетная очередь событий
-        - Асинхронная обработка
-        - Механизм восстановления после ошибок
-        - Потокобезопасность
+    Реализует паттерн Event Bus:
+    - Потокобезопасная подписка/отписка.
+    - Приоритетная очередь для publish().
+    - Обработчики вызываются последовательно в _process_queue() (синхронно).
+    - Не вызывает обработчики под локом, избегая дедлоков.
     """
 
     _instance = None
-    _handlers: Dict[EventType, List[EventHandler]] = {}
-    _queue = PriorityQueue()
-    _lock = Lock()
-    _processing = False
-    _error_handlers: List[Callable[[Exception], None]] = []
 
     def __new__(cls):
+        """Синглтон, чтобы иметь общий EventBus во всём приложении."""
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
@@ -184,18 +167,21 @@ class EventBus:
     def __init__(self):
         if not hasattr(self, "_initialized"):
             self._logger = logging.getLogger(__name__)
-            self._handlers = {event_type: [] for event_type in EventType}
+            self._lock = Lock()
+            self._queue = PriorityQueue()  # Храним события (Event)
+            self._handlers: Dict[EventType, List[EventHandler]] = {}
+            for et in EventType:
+                self._handlers[et] = []  # Инициализируем списки обработчиков
+            self._error_handlers: List[Callable[[Exception], None]] = []
+            self._processing = False
             self._initialized = True
 
     def subscribe(self, event_type: EventType, handler: EventHandler) -> None:
-        """Подписка на события с типобезопасностью и обработкой приоритетов.
-
-        Описание:
-            Регистрирует обработчик для указанного типа события.
+        """Подписка на события.
 
         Args:
-            event_type: Тип события для подписки
-            handler: Реализация типобезопасного обработчика событий
+            event_type (EventType): Тип события для подписки.
+            handler (EventHandler): Обработчик события.
         """
         with self._lock:
             if event_type not in self._handlers:
@@ -204,118 +190,108 @@ class EventBus:
             self._logger.debug(f"Подписка на {event_type}: {handler.__class__.__name__}")
 
     def unsubscribe(self, event_type: EventType, handler: EventHandler) -> None:
-        """Безопасная отписка от событий.
-
-        Описание:
-            Удаляет обработчик для указанного типа события.
+        """Отписка от событий.
 
         Args:
-            event_type: Тип события для отписки
-            handler: Обработчик для удаления
+            event_type (EventType): Тип события.
+            handler (EventHandler): Обработчик для удаления.
         """
         with self._lock:
             if event_type in self._handlers:
+                before_count = len(self._handlers[event_type])
                 self._handlers[event_type] = [h for h in self._handlers[event_type] if h != handler]
-                self._logger.debug(f"Отписка от {event_type}: {handler.__class__.__name__}")
+                after_count = len(self._handlers[event_type])
+                self._logger.debug(
+                    f"Отписка от {event_type}: {handler.__class__.__name__}. "
+                    f"Было {before_count}, стало {after_count}."
+                )
 
-    def publish(self, event: Event) -> None:
-        """Публикация события с обработкой приоритетов и восстановлением после ошибок.
-
-        Описание:
-            Помещает событие в очередь и запускает его обработку.
+    def publish(self, event: Event, immediate: bool = True) -> None:
+        """
+        Публикация события с учётом приоритета.
 
         Args:
-            event: Объект события для публикации
+            event (Event): Событие для публикации.
+            immediate (bool): Если True (по умолчанию), событие обрабатывается немедленно,
+                иначе событие просто кладётся в очередь, а дальнейшая обработка
+                произойдёт при явном вызове _process_queue() или в другой момент.
         """
+        self._logger.debug(f"Публикую событие: {event.type}, ID={event.id}, приоритет={event.type.priority}")
         self._queue.put(event)
-        if not self._processing:
+
+        # Если immediate=True и сейчас не идёт обработка, запускаем _process_queue()
+        if immediate and not self._processing:
             self._process_queue()
 
     def _process_queue(self) -> None:
-        """Обработка очереди событий с учетом приоритетов.
-
-        Описание:
-            Последовательно обрабатывает события из очереди.
-        """
+        """Обработка очереди событий (синхронно), без удержания лока при вызове обработчиков."""
         self._processing = True
         try:
             while not self._queue.empty():
                 event = self._queue.get()
+                self._logger.debug(f"Взяли событие из очереди: {event.type}, ID={event.id}")
                 self._handle_event(event)
         finally:
             self._processing = False
+            self._logger.debug("Обработка очереди завершена.")
 
     def _handle_event(self, event: Event) -> None:
-        """Обработка одного события с восстановлением после ошибок.
+        """Внутренняя обработка одного события, вызывает подписчиков."""
+        with self._lock:
+            # Копируем список подписчиков под локом, а вызываем колбэки уже вне лока.
+            handlers = self._handlers.get(event.type, [])[:]
 
-        Описание:
-            Обрабатывает одно событие, вызывая все соответствующие обработчики.
+        self._logger.debug(f"Обработка события {event.type}, подписчиков: {len(handlers)}, ID={event.id}")
 
-        Args:
-            event: Событие для обработки
-        """
-        handlers = self._handlers.get(event.type, [])
         for handler in handlers:
             try:
                 if callable(handler):
+                    # handler -- это функция, а не класс
+                    self._logger.debug(f"Вызываю функцию-обработчик {handler} для {event.type}")
                     handler(event)
                 elif hasattr(handler, "handle"):
+                    # handler -- EventHandler
+                    self._logger.debug(f"Вызываю метод handle() у {handler.__class__.__name__}")
                     handler.handle(event)
                 else:
                     raise ValueError(f"Invalid handler type: {type(handler)}")
             except Exception as e:
-                self._logger.error(f"Error handling {event.type}: {str(e)}")
+                self._logger.error(
+                    f"Ошибка в обработчике {handler} при событии {event.type}: {str(e)}", exc_info=True
+                )
                 for error_handler in self._error_handlers:
                     try:
                         error_handler(e)
                     except Exception as eh_error:
-                        self._logger.error(f"Error in error handler: {str(eh_error)}")
+                        self._logger.error(f"Ошибка в error_handler: {str(eh_error)}", exc_info=True)
 
     def add_error_handler(self, handler: Callable[[Exception], None]) -> None:
         """Добавление глобального обработчика ошибок.
 
-        Описание:
-            Регистрирует функцию для обработки ошибок событий.
-
         Args:
-            handler: Функция обработки ошибок
+            handler (Callable[[Exception], None]): Функция, которая примет Exception.
         """
         self._error_handlers.append(handler)
+        self._logger.debug(f"Добавлен global error handler: {handler}")
 
     def clear_all_handlers(self) -> None:
-        """Безопасная очистка всех обработчиков.
-
-        Описание:
-            Удаляет все зарегистрированные обработчики событий и ошибок.
-        """
+        """Удаляет все зарегистрированные обработчики событий и ошибок."""
         with self._lock:
-            self._handlers = {event_type: [] for event_type in EventType}
-            self._error_handlers = []
-            self._logger.debug("Все обработчики очищены")
+            for et in self._handlers:
+                self._handlers[et].clear()
+            self._error_handlers.clear()
+            self._logger.debug("Очищены все обработчики событий и ошибок.")
 
     def get_handlers_count(self, event_type: Optional[EventType] = None) -> int:
-        """Получение количества зарегистрированных обработчиков.
-
-        Описание:
-            Подсчитывает количество обработчиков для указанного типа события или всех событий.
+        """Возвращает количество подписчиков для указанного event_type (или всех).
 
         Args:
-            event_type: Опциональный тип события для подсчета обработчиков
+            event_type (Optional[EventType]): Тип события для подсчета (или None для всех).
 
         Returns:
-            int: Количество обработчиков
+            int: Число обработчиков.
         """
-        if event_type:
-            return len(self._handlers.get(event_type, []))
-        return sum(len(handlers) for handlers in self._handlers.values())
-
-    def emit(self, event: Event) -> None:
-        """Псевдоним для метода publish для обеспечения совместимости.
-
-        Описание:
-            Перенаправляет вызов к методу publish.
-
-        Args:
-            event: Событие для отправки
-        """
-        self.publish(event)
+        with self._lock:
+            if event_type:
+                return len(self._handlers.get(event_type, []))
+            return sum(len(hlist) for hlist in self._handlers.values())

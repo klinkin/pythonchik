@@ -6,7 +6,7 @@ import customtkinter as ctk
 import pytest
 
 from pythonchik.ui.app import ModernApp
-from pythonchik.ui.core import ApplicationCore
+from pythonchik.core import ApplicationCore
 
 
 @pytest.fixture

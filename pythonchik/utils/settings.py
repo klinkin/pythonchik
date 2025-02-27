@@ -16,8 +16,11 @@ class SettingsManager:
     обеспечивая персистентность между сессиями.
     """
 
-    def __init__(self) -> None:
-        self.settings_file = Path.home() / ".pythonchik" / "settings.json"
+    def __init__(self, settings_dir: Optional[Path] = None) -> None:
+        if settings_dir is None:
+            self.settings_file = Path.home() / ".pythonchik" / "settings.json"
+        else:
+            self.settings_file = settings_dir / "settings.json"
         self.settings_file.parent.mkdir(parents=True, exist_ok=True)
         self.settings: Dict[str, Any] = self._load_settings()
 
@@ -34,7 +37,7 @@ class SettingsManager:
 
     def _get_default_settings(self) -> Dict[str, Any]:
         """Returns настройки по умолчанию."""
-        return {"theme": "dark", "last_directory": str(Path.home()), "auto_save": True, "show_tooltips": True}
+        return {"theme": "system", "last_directory": str(Path.home()), "auto_save": True, "show_tooltips": True}
 
     def save_settings(self) -> None:
         """Сохраняет текущие настройки в файл."""
@@ -52,7 +55,7 @@ class SettingsManager:
 
     def get_theme(self) -> str:
         """Получает текущую тему интерфейса."""
-        return self.get_setting("theme") or "dark"
+        return self.get_setting("theme") or "system"
 
     def set_theme(self, theme: str) -> None:
         """Устанавливает тему интерфейса."""

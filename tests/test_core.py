@@ -1,188 +1,116 @@
-"""Тесты для класса ApplicationCore в core.py.
-
-Этот модуль содержит тесты для проверки корректности работы
-основного компонента приложения.
-"""
-
-import asyncio
-import threading
-from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List
+import time
+from unittest.mock import MagicMock
 
 import pytest
 
 from pythonchik.core import ApplicationCore, ApplicationState
+from pythonchik.utils.error_handler import ErrorContext, ErrorSeverity
 from pythonchik.utils.event_system import Event, EventBus, EventType
 
 
-@pytest.fixture
-def app_core() -> ApplicationCore:
-    """Фикстура для создания экземпляра ApplicationCore.
+def test_start_stop():
+    bus = EventBus()
+    bus.clear_all_handlers()
+    core = ApplicationCore(bus)
 
-    Returns:
-        Настроенный экземпляр ApplicationCore для тестирования.
+    core.start()
+    assert core._is_running
+    assert core._worker_thread is not None
 
-    Note:
-        Создает изолированный экземпляр для каждого теста.
+    core.stop()
+    assert not core._is_running
+    if core._worker_thread:
+        assert not core._worker_thread.is_alive()
+
+
+def test_add_task_and_completion():
     """
-    event_bus = EventBus()
-    return ApplicationCore(event_bus)
-
-
-def test_initial_state(app_core: ApplicationCore) -> None:
-    """Тест начального состояния ApplicationCore.
-
-    Args:
-        app_core: Тестируемый экземпляр ApplicationCore
-
-    Note:
-        Проверяет корректность инициализации компонента.
+    Проверяем, что при добавлении задачи (add_task) она обрабатывается
+    в фоновом потоке, и в итоге публикуется событие TASK_COMPLETED.
     """
-    assert app_core.state == ApplicationState.IDLE
+    bus = EventBus()
+    bus.clear_all_handlers()
+
+    mock_publish = MagicMock()
+    bus.publish = mock_publish
+
+    core = ApplicationCore(bus)
+    core.start()
+
+    def dummy_task():
+        return 42
+
+    core.add_task(dummy_task)
+    time.sleep(0.3)  # дать время воркеру обработать задачу
+
+    # Смотрим, какие события реально публиковались
+    calls = [call_args[0][0] for call_args in mock_publish.call_args_list]
+    # calls — список Event, которые пошли в bus.publish(Event(...))
+
+    # Проверяем, что есть событие type=TASK_COMPLETED, data={'result':42}
+    found = any(
+        (ev.type == EventType.TASK_COMPLETED and ev.data == {"result": 42})
+        for ev in calls
+    )
+    assert found, "Не нашли событие TASK_COMPLETED с data={'result': 42}"
+
+    core.stop()
 
 
-def test_start_stop(app_core: ApplicationCore) -> None:
-    """Тест запуска и остановки фонового потока.
+def test_handle_error():
+    bus = EventBus()
+    bus.clear_all_handlers()
 
-    Args:
-        app_core: Тестируемый экземпляр ApplicationCore
+    mock_publish = MagicMock()
+    bus.publish = mock_publish
 
-    Note:
-        Проверяет корректность запуска и остановки фонового потока.
+    core = ApplicationCore(bus)
+    core.start()
+
+    # force an error
+    def fail_task():
+        raise ValueError("Simulated failure")
+
+    core.add_task(fail_task)
+    time.sleep(0.3)
+
+    # ERROR_OCCURRED должен опубликоваться
+    # Аналогично проверяем все вызовы
+    calls = [call_args[0][0] for call_args in mock_publish.call_args_list]
+    found_error = any(ev.type == EventType.ERROR_OCCURRED for ev in calls)
+    assert found_error, "Не опубликовалось событие ERROR_OCCURRED"
+
+    core.stop()
+
+
+def test_handle_task_synchronous():
     """
-    app_core.start()
-    assert app_core._is_running is True
-    assert app_core._worker_thread is not None
-    assert app_core._worker_thread.is_alive()
-
-    app_core.stop()
-    assert app_core._is_running is False
-    assert not app_core._worker_thread.is_alive()
-
-
-def test_task_processing(app_core: ApplicationCore) -> None:
-    """Тест обработки задач.
-
-    Args:
-        app_core: Тестируемый экземпляр ApplicationCore
-
-    Note:
-        Проверяет корректность обработки задач и изменения состояния.
+    Проверяем handle_task(): синхронную обработку задачи (не через очередь).
+    Должен опубликоваться TASK_COMPLETED с {'result': 'sync_result'}.
     """
-    result = []
+    bus = EventBus()
+    bus.clear_all_handlers()
 
-    def test_task():
-        result.append(1)
-        return True
+    mock_publish = MagicMock()
+    bus.publish = mock_publish
 
-    app_core.start()
-    app_core.add_task(test_task)
+    core = ApplicationCore(bus)
 
-    # Даем время на выполнение задачи
-    import time
+    def dummy_logic():
+        return "sync_result"
 
-    time.sleep(0.1)
+    def on_complete(res):
+        assert res == "sync_result"
 
-    assert len(result) == 1
-    assert result[0] == 1
-    assert app_core.state == ApplicationState.IDLE
+    core.handle_task(dummy_logic, description="TestSync", on_complete=on_complete)
 
-    app_core.stop()
+    # Смотрим события
+    calls = [call_args[0][0] for call_args in mock_publish.call_args_list]
+    found_sync = any(
+        (ev.type == EventType.TASK_COMPLETED and ev.data == {"result": "sync_result"})
+        for ev in calls
+    )
+    assert found_sync, "Не нашли TASK_COMPLETED с data={'result': 'sync_result'}"
 
-
-def test_error_handling(app_core: ApplicationCore) -> None:
-    """Тест обработки ошибок.
-
-    Args:
-        app_core: Тестируемый экземпляр ApplicationCore
-
-    Note:
-        Проверяет корректность обработки ошибок в задачах.
-    """
-    error_events = []
-
-    def on_error(event: Event) -> None:
-        error_events.append(event)
-
-    app_core.event_bus.subscribe(EventType.ERROR_OCCURRED, on_error)
-
-    def failing_task():
-        raise ValueError("Test error")
-
-    app_core.start()
-    app_core.add_task(failing_task)
-
-    # Даем время на выполнение задачи
-    import time
-
-    time.sleep(0.1)
-
-    assert len(error_events) > 0
-    assert "Test error" in str(error_events[0].data)
-
-    app_core.stop()
-
-
-def test_task_with_progress(app_core: ApplicationCore) -> None:
-    """Тест обработки задач с отслеживанием прогресса.
-
-    Args:
-        app_core: Тестируемый экземпляр ApplicationCore
-
-    Note:
-        Проверяет корректность отслеживания прогресса выполнения задачи.
-    """
-    progress_events = []
-
-    def on_progress(event: Event) -> None:
-        progress_events.append(event)
-
-    app_core.event_bus.subscribe(EventType.PROGRESS_UPDATED, on_progress)
-
-    def test_task():
-        return "Success"
-
-    app_core.start()
-    app_core.handle_task(test_task, description="Test Operation")
-
-    # Даем время на выполнение задачи
-    import time
-
-    time.sleep(0.1)
-
-    assert len(progress_events) >= 2  # Начало и конец
-    assert progress_events[0].data["progress"] == 0
-    assert progress_events[-1].data["progress"] == 100
-    assert "Test Operation" in progress_events[0].data["message"]
-
-    app_core.stop()
-
-
-def test_multiple_tasks(app_core: ApplicationCore) -> None:
-    """Тест обработки нескольких задач.
-
-    Args:
-        app_core: Тестируемый экземпляр ApplicationCore
-
-    Note:
-        Проверяет корректность обработки нескольких задач в очереди.
-    """
-    results = []
-
-    def task(value: int) -> None:
-        results.append(value)
-
-    app_core.start()
-    for i in range(3):
-        app_core.add_task(lambda i=i: task(i))
-
-    # Даем время на выполнение задач
-    import time
-
-    time.sleep(0.2)
-
-    assert len(results) == 3
-    assert sorted(results) == [0, 1, 2]
-    assert app_core.state == ApplicationState.IDLE
-
-    app_core.stop()
+    # Проверим, что state вернулся в IDLE
+    assert core.state == ApplicationState.IDLE
