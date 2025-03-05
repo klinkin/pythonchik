@@ -11,6 +11,7 @@ import pytest
 from PIL import Image
 
 from pythonchik import config
+from pythonchik.errors.error_handlers import ImageProcessingError
 from pythonchik.utils.image import ImageProcessor
 
 
@@ -52,11 +53,15 @@ def test_resize_image(temp_image_file: Path, temp_output_dir: Path) -> None:
         assert height == original_size[1] // config.IMAGE_RESIZE_RATIO
 
     # Тест с несуществующим файлом
-    with pytest.raises(FileNotFoundError):
+    # Ожидаем ImageProcessingError вместо FileNotFoundError, так как метод
+    # оборачивает FileNotFoundError в ImageProcessingError
+    with pytest.raises(ImageProcessingError):
         ImageProcessor.resize_image("nonexistent.jpg", str(temp_output_dir))
 
     # Тест с некорректной директорией
-    with pytest.raises(PermissionError):
+    # Ожидаем ImageProcessingError вместо PermissionError, так как метод
+    # проверяет существование директории и выбрасывает ImageProcessingError
+    with pytest.raises(ImageProcessingError):
         ImageProcessor.resize_image(str(temp_image_file), "/nonexistent/dir")
 
 

@@ -1,42 +1,112 @@
+"""Модуль утилит и вспомогательных функций приложения Pythonchik.
+
+Этот модуль предоставляет широкий набор утилит и вспомогательных функций для:
+- Обработки и преобразования JSON файлов
+- Работы с изображениями (сжатие, изменение размера, конвертация форматов)
+- Сохранения данных в CSV формате
+- Создания ZIP-архивов
+- Отслеживания производительности (метрики, измерение времени выполнения)
+- Управления настройками приложения
+- Пакетной обработки нескольких файлов
+
+Подмодули:
+- image: Функции для обработки и манипуляции изображениями
+- settings: Управление пользовательскими настройками приложения
+- metrics: Сбор и анализ метрик производительности приложения
+
+Весь модуль интегрирован с централизованной системой обработки ошибок
+приложения, что обеспечивает согласованное логирование и обработку
+исключений на всех уровнях.
+
+Основные функции:
+- process_multiple_files: Пакетная обработка нескольких файлов заданной функцией
+- save_to_csv: Сохранение данных в CSV файл с указанными заголовками
+- load_json_file: Загрузка и парсинг JSON файла с обработкой ошибок
+- create_archive: Создание ZIP-архива с указанными файлами
+- validate_json_structure: Валидация JSON данных согласно ожидаемой структуре
+
+Примеры:
+    Обработка нескольких JSON файлов:
+
+    >>> from pythonchik.utils import process_multiple_files, load_json_file
+    >>>
+    >>> def extract_cities(data):
+    ...     return [location['city'] for location in data['locations']]
+    >>>
+    >>> files = ['data1.json', 'data2.json']
+    >>> cities = process_multiple_files(files, load_json_file, extract_cities)
+    >>> print(cities)  # ['Москва', 'Санкт-Петербург', 'Новосибирск', ...]
+
+    Работа с изображениями:
+
+    >>> from pythonchik.utils.image import compress_image, convert_image_format
+    >>>
+    >>> # Сжатие изображения
+    >>> compressed_path = compress_image('photo.jpg', quality=80)
+    >>> print(f"Сжатое изображение сохранено в {compressed_path}")
+    >>>
+    >>> # Конвертация формата
+    >>> webp_path = convert_image_format('photo.jpg', 'webp')
+    >>> print(f"Конвертированное изображение сохранено в {webp_path}")
+
+    Отслеживание производительности:
+
+    >>> from pythonchik.utils.metrics import MetricsCollector, timed
+    >>>
+    >>> # Замер времени выполнения функции
+    >>> @timed("data_processing")
+    >>> def process_data(items):
+    ...     # Длительная обработка данных
+    ...     return result
+    >>>
+    >>> # Вызов функции с отслеживанием времени
+    >>> result = process_data(data)
+    >>>
+    >>> # Получение метрик
+    >>> collector = MetricsCollector.instance
+    >>> metrics = collector.get_metrics()
+    >>> print(f"Время выполнения: {metrics['timings']['data_processing']} мс")
+"""
+
 import csv
 import json
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Dict, List, Optional, TypeVar, Union
 
-from pythonchik.utils.error_handler import ErrorContext, ErrorHandler, ErrorSeverity, FileOperationError
+from pythonchik.errors.error_handlers import ErrorContext, ErrorHandler, ErrorSeverity, FileOperationError
+
+T = TypeVar("T")
 
 
-def process_multiple_files(files: list[str], processor_func: Any, *args: Any) -> list[Any]:
-    """Обработка нескольких файлов с помощью указанной функции.
+def process_multiple_files(
+    files: List[str], processor_func: Callable[[Dict[str, Any], Any], T], *args: Any
+) -> List[T]:
+    """Обрабатывает несколько файлов с помощью указанной функции.
 
-    Функция последовательно обрабатывает список файлов, применяя к каждому
-    заданную функцию обработки с дополнительными аргументами. При возникновении
-    ошибки обработки одного файла, функция продолжает работу с остальными файлами.
+    Последовательно обрабатывает список файлов, применяя к каждому заданную
+    функцию обработки с дополнительными аргументами. При возникновении ошибки
+    обработки одного файла, функция продолжает работу с остальными файлами.
 
     Args:
-        files (list[str]): Список путей к файлам для обработки. Каждый путь должен
-            указывать на существующий и доступный для чтения файл.
-        processor_func (Any): Функция для обработки каждого файла. Должна принимать
+        files: Список путей к файлам для обработки.
+        processor_func: Функция для обработки каждого файла. Должна принимать
             словарь с данными из JSON файла как первый аргумент.
-        *args (Any): Дополнительные Args, которые будут переданы в processor_func.
+        *args: Дополнительные аргументы, которые будут переданы в processor_func.
 
     Returns:
-        list[Any]: Список результатов обработки файлов. Каждый элемент списка
-            представляет собой результат применения processor_func к соответствующему файлу.
+        Список результатов обработки файлов. Каждый элемент списка представляет
+        собой результат применения processor_func к соответствующему файлу.
 
-    Note:
-        - Продолжает обработку при ошибках отдельных файлов
-        - Автоматически обрабатывает ошибки и логирует их
-        - Поддерживает как одиночные значения, так и списки в результатах
+    Raises:
+        FileNotFoundError: Если один из файлов не найден.
 
-    Пример использования:
+    Examples:
         >>> files = ['data1.json', 'data2.json']
         >>> def count_unique_offers(data):
         ...     return len(set(offer['id'] for offer in data['offers']))
         >>> results = process_multiple_files(files, count_unique_offers)
-        >>> print(results)  # Количество уникальных предложений в каждом файле
-        [10, 8]
+        >>> print(results)  # [10, 8]
     """
     results = []
     error_handler = ErrorHandler()
@@ -49,63 +119,38 @@ def process_multiple_files(files: list[str], processor_func: Any, *args: Any) ->
                 results.extend(result if isinstance(result, list) else [result])
         except FileNotFoundError as e:
             error_handler.handle_error(
-                FileOperationError(
-                    str(e),
-                    context=ErrorContext(
-                        operation="Обработка файла",
-                        details={"file_path": file_path},
-                        severity=ErrorSeverity.ERROR,
-                        recovery_action="Проверьте наличие файла",
-                    ),
-                ),
+                FileOperationError(str(e), file_path, "Обработка файла"),
                 "Обработка файла",
                 ErrorSeverity.ERROR,
             )
             raise
         except Exception as e:
-            error = FileOperationError(
-                str(e),
-                context=ErrorContext(
-                    operation="Обработка файла",
-                    details={"file_path": file_path},
-                    severity=ErrorSeverity.ERROR,
-                    recovery_action="Проверьте формат и доступность файла",
-                ),
-            )
+            error = FileOperationError(str(e), file_path, "Обработка файла")
             error_handler.handle_error(error, "Обработка файла", ErrorSeverity.ERROR)
             continue
     return results
 
 
-def save_to_csv(data: list[Any], header: list[str], output_path: str) -> None:
-    """Сохранить данные в CSV файл.
+def save_to_csv(data: List[Any], header: List[str], output_path: str) -> None:
+    """Сохраняет данные в CSV файл.
 
-    Функция записывает переданные данные в CSV файл с указанными заголовками.
-    Каждый элемент данных записывается в отдельную строку. Функция автоматически
+    Записывает переданные данные в CSV файл с указанными заголовками.
+    Каждый элемент данных записывается в отдельную строку. Автоматически
     создает директорию для файла, если она не существует.
 
     Args:
-        data (list[Any]): Список данных для сохранения в CSV. Каждый элемент
+        data: Список данных для сохранения в CSV. Каждый элемент
             будет записан в отдельную строку файла.
-        header (list[str]): Список заголовков столбцов CSV файла.
-        output_path (str): Полный путь для сохранения CSV файла.
+        header: Список заголовков столбцов CSV файла.
+        output_path: Полный путь для сохранения CSV файла.
             Если директория не существует, она будет создана.
 
-    Returns:
-        None
+    Raises:
+        PermissionError: При отсутствии прав для создания файла или директории.
+        OSError: При ошибке записи данных в файл.
+        FileOperationError: При возникновении других проблем с файловыми операциями.
 
-    Исключения:
-        FileOperationError: Возникает в следующих случаях:
-            - Недостаточно прав для создания файла или директории
-            - Ошибка при записи данных
-            - Проблемы с кодировкой
-
-    Note:
-        - Автоматически создает директории при необходимости
-        - Использует кодировку UTF-8
-        - Каждый элемент данных записывается в отдельную строку
-
-    Пример использования:
+    Examples:
         >>> data = ['Адрес 1', 'Адрес 2']
         >>> header = ['Адрес']
         >>> save_to_csv(data, header, 'addresses.csv')
@@ -122,77 +167,50 @@ def save_to_csv(data: list[Any], header: list[str], output_path: str) -> None:
             writer.writerows([[item] for item in data])
     except PermissionError as e:
         error_handler.handle_error(
-            FileOperationError(
-                "Отказано в доступе",
-                context=ErrorContext(
-                    operation="Сохранение CSV",
-                    details={"output_path": output_path},
-                    severity=ErrorSeverity.ERROR,
-                    recovery_action="Проверьте права доступа к файлу",
-                ),
-            ),
+            FileOperationError("Отказано в доступе", output_path, "Сохранение CSV"),
             "Сохранение CSV",
             ErrorSeverity.ERROR,
         )
         raise PermissionError("Отказано в доступе")
     except OSError as e:
         error_handler.handle_error(
-            FileOperationError(
-                "Ошибка при записи в CSV файл",
-                context=ErrorContext(
-                    operation="Сохранение CSV",
-                    details={"output_path": output_path},
-                    severity=ErrorSeverity.ERROR,
-                    recovery_action="Проверьте возможность записи в файл",
-                ),
-            ),
+            FileOperationError("Ошибка при записи в CSV файл", output_path, "Сохранение CSV"),
             "Сохранение CSV",
             ErrorSeverity.ERROR,
         )
         raise OSError("Ошибка при записи в CSV файл")
     except Exception as e:
-        error = FileOperationError(
-            str(e),
-            context=ErrorContext(
-                operation="Сохранение CSV",
-                details={"output_path": output_path},
-                severity=ErrorSeverity.ERROR,
-                recovery_action="Проверьте права доступа и путь к файлу",
-            ),
-        )
+        error = FileOperationError(str(e), output_path, "Сохранение CSV")
         error_handler.handle_error(error, "Сохранение CSV", ErrorSeverity.ERROR)
         raise error
 
 
-def load_json_file(file_path: str) -> dict[str, Any]:
-    """Загрузка и парсинг JSON файла.
+def load_json_file(file_path: str) -> Dict[str, Any]:
+    """Загружает и парсит JSON файл.
 
-    Функция загружает JSON файл по указанному пути и преобразует его в словарь Python.
-    Поддерживает обработку файлов в кодировке UTF-8. При возникновении ошибок
-    во время чтения или парсинга файла, генерирует исключение с подробным описанием
-    проблемы и рекомендациями по её устранению.
+    Загружает JSON файл по указанному пути и преобразует его в словарь Python.
+    Поддерживает обработку файлов в кодировке UTF-8 и централизованно обрабатывает
+    все возможные исключения при чтении и парсинге.
 
     Args:
-        file_path (str): Полный путь к JSON файлу для загрузки. Путь должен быть
-            доступен для чтения и указывать на корректный JSON файл.
+        file_path: Полный путь к JSON файлу для загрузки.
 
     Returns:
-        Dict[str, Any]: Словарь, содержащий распарсенные JSON данные. Структура словаря
-            соответствует структуре исходного JSON файла.
+        Словарь, содержащий распарсенные JSON данные.
 
-    Исключения:
-        FileOperationError: Возникает в следующих случаях:
-            - Файл не найден или недоступен для чтения
-            - Некорректный формат JSON
-            - Проблемы с кодировкой файла
+    Raises:
+        FileNotFoundError: Если файл не найден или недоступен для чтения.
+        JSONDecodeError: При некорректном формате JSON.
+        UnicodeDecodeError: При проблемах с кодировкой файла.
+        FileOperationError: При других ошибках файловых операций.
 
-    Пример использования:
+    Examples:
         >>> try:
         ...     data = load_json_file('data.json')
-        ...     print(data['catalogs'][0]['target_shops'])
+        ...     print(data['catalogs'][0]['name'])
         ... except FileOperationError as e:
         ...     print(f'Ошибка при загрузке файла: {e}')
-        ['Магазин 1', 'Магазин 2']
+        'Основной каталог'
     """
     error_handler = ErrorHandler()
     try:
@@ -200,91 +218,49 @@ def load_json_file(file_path: str) -> dict[str, Any]:
             return json.load(f)
     except FileNotFoundError as e:
         error_handler.handle_error(
-            FileOperationError(
-                "JSON файл не найден",
-                context=ErrorContext(
-                    operation="Загрузка JSON",
-                    details={"file_path": file_path},
-                    severity=ErrorSeverity.ERROR,
-                    recovery_action="Проверьте путь к файлу",
-                ),
-            ),
+            FileOperationError("JSON файл не найден", file_path, "Загрузка JSON"),
             "Загрузка JSON",
             ErrorSeverity.ERROR,
         )
         raise FileNotFoundError("JSON файл не найден")
     except json.JSONDecodeError as e:
         error_handler.handle_error(
-            FileOperationError(
-                "Некорректный формат JSON",
-                context=ErrorContext(
-                    operation="Загрузка JSON",
-                    details={"file_path": file_path},
-                    severity=ErrorSeverity.ERROR,
-                    recovery_action="Проверьте формат JSON файла",
-                ),
-            ),
+            FileOperationError("Некорректный формат JSON", file_path, "Загрузка JSON"),
             "Загрузка JSON",
             ErrorSeverity.ERROR,
         )
         raise json.JSONDecodeError("Некорректный формат JSON", e.doc, e.pos)
     except UnicodeDecodeError as e:
         error_handler.handle_error(
-            FileOperationError(
-                "Некорректная кодировка файла",
-                context=ErrorContext(
-                    operation="Загрузка JSON",
-                    details={"file_path": file_path},
-                    severity=ErrorSeverity.ERROR,
-                    recovery_action="Проверьте кодировку файла",
-                ),
-            ),
+            FileOperationError("Некорректная кодировка файла", file_path, "Загрузка JSON"),
             "Загрузка JSON",
             ErrorSeverity.ERROR,
         )
         raise UnicodeDecodeError(e.encoding, e.object, e.start, e.end, "Некорректная кодировка файла")
     except Exception as e:
-        error = FileOperationError(
-            str(e),
-            context=ErrorContext(
-                operation="Загрузка JSON",
-                details={"file_path": file_path},
-                severity=ErrorSeverity.ERROR,
-                recovery_action="Проверьте формат и кодировку файла",
-            ),
-        )
+        error = FileOperationError(str(e), file_path, "Загрузка JSON")
         error_handler.handle_error(error, "Загрузка JSON", ErrorSeverity.ERROR)
         raise error
 
 
-def create_archive(files: list[str], archive_path: str) -> None:
-    """Создание ZIP-архива с указанными файлами.
+def create_archive(files: List[str], archive_path: str) -> None:
+    """Создает ZIP-архив с указанными файлами.
 
-    Функция создает ZIP-архив и добавляет в него все указанные файлы,
-    используя сжатие DEFLATED для уменьшения размера архива. Автоматически
-    создает директорию для архива, если она не существует.
+    Создает ZIP-архив и добавляет в него все указанные файлы, используя сжатие
+    DEFLATED для уменьшения размера. Автоматически создает директорию для архива,
+    если она не существует, и предварительно проверяет существование всех файлов.
 
     Args:
-        files (list[str]): Список путей к файлам для включения в архив.
-            Каждый путь должен указывать на существующий файл.
-        archive_path (str): Полный путь, по которому будет сохранен ZIP-архив.
-            Если директория не существует, она будет создана автоматически.
+        files: Список путей к файлам для включения в архив.
+        archive_path: Полный путь, по которому будет сохранен ZIP-архив.
 
-    Returns:
-        None
+    Raises:
+        FileNotFoundError: Если один или несколько файлов не найдены.
+        PermissionError: При отсутствии прав для создания архива.
+        OSError: При ошибке сжатия или записи архива.
+        FileOperationError: При других ошибках файловых операций.
 
-    Исключения:
-        FileOperationError: Возникает в следующих случаях:
-            - Один или несколько файлов не найдены
-            - Недостаточно прав для создания архива
-            - Ошибка при сжатии файлов
-
-    Note:
-        - Автоматически создает директории при необходимости
-        - Использует DEFLATED сжатие для оптимизации размера
-        - Сохраняет файлы в поддиректории 'compressed_images'
-
-    Пример использования:
+    Examples:
         >>> files = ['image1.png', 'image2.png']
         >>> create_archive(files, 'output/images.zip')
     """
@@ -294,66 +270,40 @@ def create_archive(files: list[str], archive_path: str) -> None:
         if not archive_dir.exists():
             archive_dir.mkdir(parents=True, exist_ok=True)
 
+        # Проверим все файлы перед созданием архива
+        for file_path in files:
+            file_path_obj = Path(file_path)
+            if not file_path_obj.exists():
+                error_handler.handle_error(
+                    FileOperationError(f"Файл не найден: {file_path}", file_path, "Создание архива"),
+                    "Создание архива",
+                    ErrorSeverity.ERROR,
+                )
+                raise FileNotFoundError(f"Файл не найден: {file_path}")
+
+        # Создаем архив только если все файлы существуют
         with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zipf:
             for file_path in files:
-                file_path_obj = Path(file_path)
-                if file_path_obj.exists():
-                    arcname = file_path_obj.name
-                    zipf.write(file_path, arcname=arcname)
-                else:
-                    error_handler.handle_error(
-                        FileOperationError(
-                            f"Файл не найден: {file_path}",
-                            context=ErrorContext(
-                                operation="Создание архива",
-                                details={"file_path": file_path},
-                                severity=ErrorSeverity.ERROR,
-                                recovery_action="Проверьте наличие файла",
-                            ),
-                        ),
-                        "Создание архива",
-                        ErrorSeverity.ERROR,
-                    )
-                    raise FileNotFoundError(f"Файл не найден: {file_path}")
+                arcname = Path(file_path).name
+                zipf.write(file_path, arcname=arcname)
+    except FileNotFoundError:
+        # Пробрасываем исключение FileNotFoundError напрямую
+        raise
     except PermissionError as e:
         error_handler.handle_error(
-            FileOperationError(
-                "Отказано в доступе",
-                context=ErrorContext(
-                    operation="Создание архива",
-                    details={"archive_path": archive_path},
-                    severity=ErrorSeverity.ERROR,
-                    recovery_action="Проверьте права доступа",
-                ),
-            ),
+            FileOperationError("Отказано в доступе", archive_path, "Создание архива"),
             "Создание архива",
             ErrorSeverity.ERROR,
         )
         raise PermissionError("Отказано в доступе")
     except OSError as e:
         error_handler.handle_error(
-            FileOperationError(
-                "Не удалось создать архив",
-                context=ErrorContext(
-                    operation="Создание архива",
-                    details={"archive_path": archive_path},
-                    severity=ErrorSeverity.ERROR,
-                    recovery_action="Проверьте возможность создания архива",
-                ),
-            ),
+            FileOperationError("Не удалось создать архив", archive_path, "Создание архива"),
             "Создание архива",
             ErrorSeverity.ERROR,
         )
         raise OSError("Не удалось создать архив")
     except Exception as e:
-        error = FileOperationError(
-            str(e),
-            context=ErrorContext(
-                operation="Создание архива",
-                details={"archive_path": archive_path},
-                severity=ErrorSeverity.ERROR,
-                recovery_action="Проверьте права доступа и наличие файлов",
-            ),
-        )
+        error = FileOperationError(str(e), archive_path, "Создание архива")
         error_handler.handle_error(error, "Создание архива", ErrorSeverity.ERROR)
         raise

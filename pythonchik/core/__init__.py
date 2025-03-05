@@ -1,8 +1,24 @@
-"""Core package for Pythonchik application.
+"""Ядро приложения Pythonchik.
 
-This package contains the core functionality and application infrastructure.
+Этот модуль содержит компоненты ядра приложения, отвечающие за:
+- Управление жизненным циклом приложения
+- Обработку задач в фоновом режиме
+- Отслеживание и управление состоянием приложения
+- Взаимодействие с системой событий
+
+Основные компоненты:
+- ApplicationCore: Главный класс ядра, управляющий выполнением задач в фоновом режиме
+- ApplicationState: Перечисление возможных состояний приложения
+- ApplicationStateManager: Управление состоянием и историей переходов между состояниями
+
+Использование:
+    >>> from pythonchik.core.application_core import ApplicationCore
+    >>> from pythonchik.events.eventbus import EventBus
+    >>> bus = EventBus()
+    >>> core = ApplicationCore(bus)
+    >>> core.start()  # Запускает фоновый поток обработки задач
+    >>> # Добавление задачи на выполнение
+    >>> core.add_task(lambda: print("Выполнение в фоновом потоке"))
+    >>> # Завершение работы
+    >>> core.stop()
 """
-
-from pythonchik.core.application_core import ApplicationCore, ApplicationState
-
-__all__ = ["ApplicationCore", "ApplicationState"]

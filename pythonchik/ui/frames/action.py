@@ -131,3 +131,13 @@ class ActionMenuFrame(ctk.CTkFrame):
         self.analysis_label.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="w")
         for i, button in enumerate(self.analysis_buttons, start=1):
             button.grid(row=i, column=0, padx=10, pady=5, sticky="ew")
+
+    def set_buttons_state(self, enabled: bool) -> None:
+        """Enable or disable all buttons in the menu based on processing state.
+
+        Args:
+            enabled (bool): True to enable buttons, False to disable
+        """
+        for button_list in [self.json_buttons, self.image_buttons, self.analysis_buttons]:
+            for button in button_list:
+                button.configure(state="normal" if enabled else "disabled")

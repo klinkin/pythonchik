@@ -122,6 +122,13 @@ class SideBarFrame(ctk.CTkFrame):
             tooltip="Аналитика и статистика",
         )
 
+        self.metric_button = self._create_nav_button(
+            "Метрики",
+            self.analysis_button_icon,
+            row=4,
+            tooltip="Метрики производительности",
+        )
+
     def _create_nav_button(
         self, text: str, image: ctk.CTkImage, row: int, tooltip: str | None = None
     ) -> ctk.CTkButton:
@@ -164,6 +171,7 @@ class SideBarFrame(ctk.CTkFrame):
         json_command: Callable[[], None],
         image_command: Callable[[], None],
         analysis_command: Callable[[], None],
+        metric_command: Callable[[], None],
         theme_command: Callable[[str], None],
     ) -> None:
         """Установка функций обратного вызова для всех кнопок навигации.
@@ -177,6 +185,7 @@ class SideBarFrame(ctk.CTkFrame):
         self.json_button.configure(command=json_command)
         self.image_button.configure(command=image_command)
         self.analysis_button.configure(command=analysis_command)
+        self.metric_button.configure(command=metric_command)
         self.appearance_mode_menu.configure(command=theme_command)
 
     def update_selected_tab(self, selected_name: str) -> None:
@@ -193,6 +202,9 @@ class SideBarFrame(ctk.CTkFrame):
         )
         self.analysis_button.configure(
             fg_color=(("gray75", "gray25") if selected_name == "analysis" else "transparent")
+        )
+        self.metric_button.configure(
+            fg_color=(("gray75", "gray25") if selected_name == "metric" else "transparent")
         )
 
     def select_tab(self, tab_name: str) -> None:

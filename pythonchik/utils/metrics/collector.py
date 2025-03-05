@@ -1,44 +1,8 @@
-"""Модуль для сбора, анализа и сохранения метрик производительности.
+"""Модуль для сбора и хранения метрик производительности.
 
-Предоставляет инструменты для отслеживания метрик производительности приложения,
-включая счетчики вызовов функций, измерение времени выполнения операций и
-статистический анализ собранных данных. Модуль обеспечивает потокобезопасный
-сбор метрик, их сохранение в файлы JSON и удобные декораторы для интеграции
-с существующим кодом.
-
-Классы:
-    TimingMetric: Структура данных для хранения метрик времени выполнения.
-    MetricsCollector: Основной класс для сбора и анализа метрик.
-
-Функции:
-    track_timing: Декоратор для измерения времени выполнения функций.
-    count_calls: Декоратор для подсчета количества вызовов функций.
-
-Примеры:
-    Базовое использование декораторов:
-
-    >>> from pythonchik.utils.metrics import track_timing, count_calls
-    >>>
-    >>> @track_timing()
-    >>> def expensive_operation():
-    >>>     # Выполнение затратной операции
-    >>>     pass
-    >>>
-    >>> @count_calls()
-    >>> def tracked_function():
-    >>>     # Отслеживание количества вызовов
-    >>>     pass
-    >>>
-    >>> # Прямое использование коллектора метрик
-    >>> from pythonchik.utils.metrics import MetricsCollector
-    >>>
-    >>> collector = MetricsCollector()
-    >>> collector.start_timer("operation")
-    >>> # Выполнение операции
-    >>> collector.stop_timer("operation")
-    >>>
-    >>> # Сохранение метрик в файл, указанный в config.py
-    >>> collector.save_metrics()
+Предоставляет основные классы для сбора, анализа и сохранения метрик
+производительности приложения, позволяя отслеживать время выполнения
+операций и подсчитывать количество вызовов функций.
 """
 
 import asyncio
@@ -47,15 +11,12 @@ import logging
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from functools import wraps
 from pathlib import Path
 from threading import Lock
 from time import time
-from typing import Any, Callable, Dict, List, Optional, TypeVar, Union, cast
+from typing import Any, Dict, List, Optional, Union, cast
 
-from pythonchik.config import METRICS_FILE
-
-T = TypeVar("T")
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -83,9 +44,6 @@ class TimingMetric:
     max_time: float = 0.0
     last_update: float = field(default_factory=time)
     samples: List[float] = field(default_factory=list)
-
-
-logger = logging.getLogger(__name__)
 
 
 class MetricsCollector:
@@ -119,8 +77,8 @@ class MetricsCollector:
         >>> # Получение всех метрик
         >>> metrics = collector.get_metrics()
         >>>
-        >>> # Сохранение метрик в файл, указанный в config.py
-        >>> collector.save_metrics()
+        >>> # Сохранение метрик в файл
+        >>> collector.save_metrics("metrics.json")
     """
 
     _instance = None
@@ -229,14 +187,32 @@ class MetricsCollector:
             и статистику времени выполнения.
         """
         with self._lock:
-            return {"counters": dict(self._counters), "timings": dict(self._metrics)}
+            # Создаем копию данных с правильной сериализацией метрик
+            result = {"counters": dict(self._counters), "timings": {}}
 
-    async def save_metrics_async(self) -> None:
+            # Преобразуем TimingMetric в словари
+            for name, metric in self._metrics.items():
+                result["timings"][name] = {
+                    "count": metric.count,
+                    "total_time": metric.total_time,
+                    "avg_time": metric.avg_time,
+                    "min_time": metric.min_time,
+                    "max_time": metric.max_time,
+                    "last_update": metric.last_update,
+                    # Ограничиваем количество сохраняемых сэмплов
+                    "samples": metric.samples[-100:] if metric.samples else [],
+                }
+
+            return result
+
+    async def save_metrics_async(self, file_path: Union[str, Path]) -> None:
         """Асинхронно сохраняет метрики в JSON файл.
 
         Выполняет сохранение метрик в файл без блокировки основного потока
-        выполнения, используя пул потоков. Метрики сохраняются в файл,
-        указанный в METRICS_FILE из config.py.
+        выполнения, используя пул потоков.
+
+        Args:
+            file_path: Путь к файлу для сохранения метрик.
 
         Raises:
             Exception: При возникновении ошибки во время сохранения.
@@ -244,23 +220,26 @@ class MetricsCollector:
         try:
             metrics_data = self.get_metrics()
             await asyncio.get_event_loop().run_in_executor(
-                self._executor, lambda: self._save_metrics_to_file(METRICS_FILE, metrics_data)
+                self._executor, lambda: self._save_metrics_to_file(file_path, metrics_data)
             )
         except Exception as e:
             logger.error(f"Failed to save metrics: {e}")
+            raise
 
-    def save_metrics(self) -> None:
+    def save_metrics(self, file_path: Union[str, Path]) -> None:
         """Синхронно сохраняет метрики в JSON файл.
 
-        Метрики сохраняются в файл, указанный в METRICS_FILE из config.py.
+        Args:
+            file_path: Путь к файлу для сохранения метрик.
 
         Raises:
             Exception: При возникновении ошибки во время сохранения.
         """
         try:
-            self._save_metrics_to_file(METRICS_FILE, self.get_metrics())
+            self._save_metrics_to_file(file_path, self.get_metrics())
         except Exception as e:
             logger.error(f"Failed to save metrics: {e}")
+            raise
 
     def _save_metrics_to_file(self, file_path: Union[str, Path], data: dict) -> None:
         """Внутренний метод для сохранения метрик в файл.
@@ -279,112 +258,3 @@ class MetricsCollector:
         """
         with self._lock:
             self._initialize()
-
-
-def track_timing(
-    name: Optional[str] = None, threshold: Optional[float] = None
-) -> Callable[[Callable[..., T]], Callable[..., T]]:
-    """Декоратор для отслеживания времени выполнения функций.
-
-    Автоматически измеряет и записывает время выполнения декорированной функции,
-    поддерживает как синхронные, так и асинхронные функции, а также позволяет
-    настроить предупреждения при превышении порогового времени выполнения.
-
-    Args:
-        name: Опциональное пользовательское имя для метрики. По умолчанию
-            используется имя функции.
-        threshold: Опциональное пороговое значение продолжительности в секундах.
-            Если указано, при превышении этого значения будет залогировано предупреждение.
-
-    Returns:
-        Декорированная функция, которая отслеживает время выполнения.
-
-    Examples:
-        >>> # Базовое использование
-        >>> @track_timing()
-        >>> def process_data(data):
-        >>>     # Обработка данных
-        >>>     pass
-        >>>
-        >>> # Использование с пользовательским именем и порогом
-        >>> @track_timing(name="api_request", threshold=1.0)
-        >>> async def fetch_data_from_api():
-        >>>     # Асинхронный запрос к API
-        >>>     pass
-    """
-
-    def decorator(func: Callable) -> Callable:
-        metric_name = name or func.__name__
-
-        @wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            collector = MetricsCollector()
-            collector.start_timer(metric_name)
-            try:
-                result = func(*args, **kwargs)
-                return result
-            finally:
-                duration = collector.stop_timer(metric_name)
-                if threshold is not None and duration is not None and duration > threshold:
-                    logger.warning(
-                        f"Function {func.__name__} exceeded threshold: {duration:.4f}s > {threshold:.4f}s"
-                    )
-
-        @wraps(func)
-        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            collector = MetricsCollector()
-            collector.start_timer(metric_name)
-            try:
-                result = await func(*args, **kwargs)
-                return result
-            finally:
-                duration = collector.stop_timer(metric_name)
-                if threshold is not None and duration is not None and duration > threshold:
-                    logger.warning(
-                        f"Function {func.__name__} exceeded threshold: {duration:.4f}s > {threshold:.4f}s"
-                    )
-
-        return async_wrapper if asyncio.iscoroutinefunction(func) else wrapper
-
-    return decorator
-
-
-def count_calls(name: Optional[str] = None) -> Callable:
-    """Декоратор для подсчета вызовов функций.
-
-    Автоматически увеличивает счетчик при каждом вызове декорированной функции,
-    что позволяет отслеживать частоту использования функций в приложении.
-
-    Args:
-        name: Опциональное пользовательское имя для счетчика. По умолчанию
-            используется имя функции с суффиксом "_calls".
-
-    Returns:
-        Декорированная функция, которая учитывает количество вызовов.
-
-    Examples:
-        >>> # Базовое использование
-        >>> @count_calls()
-        >>> def frequently_called_function():
-        >>>     # Тело функции
-        >>>     pass
-        >>>
-        >>> # С пользовательским именем счетчика
-        >>> @count_calls(name="user_login_attempts")
-        >>> def authenticate_user(username, password):
-        >>>     # Проверка аутентификации
-        >>>     pass
-    """
-
-    def decorator(func: Callable) -> Callable:
-        counter_name = name or f"{func.__name__}_calls"
-
-        @wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            collector = MetricsCollector()
-            collector.increment_counter(counter_name)
-            return func(*args, **kwargs)
-
-        return wrapper
-
-    return decorator

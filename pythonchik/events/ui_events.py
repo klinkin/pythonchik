@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pythonchik.utils.event_system import Event, EventCategory, EventPriority, EventType
+from pythonchik.events.events import Event, EventCategory, EventPriority, EventType
 
 
 class UIEventType(Enum):

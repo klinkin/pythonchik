@@ -1,4 +1,36 @@
+"""Модуль сервисов для обработки и анализа данных приложения Pythonchik.
+
+Этот модуль содержит сервисные функции для работы с данными в различных форматах,
+обработки каталогов, анализа цен и других аналитических операций.
+
+Основные группы функций:
+    - Обработка адресной информации (извлечение и сопоставление адресов)
+    - Анализ товарных предложений (подсчет, извлечение штрих-кодов)
+    - Ценовой анализ (расчет разницы цен, поиск аномалий)
+    - Функции для работы с тестовыми данными и генерации образцов
+
+Типы обрабатываемых данных:
+    - Каталоги магазинов и их атрибуты
+    - Товарные предложения и их параметры (цены, описания)
+    - Геолокационные данные (адреса, координаты)
+
+Взаимодействие с системой событий:
+    Некоторые функции взаимодействуют с шиной событий (EventBus) для публикации
+    уведомлений о прогрессе операций и других статусных сообщений.
+
+Примеры использования:
+    >>> from pythonchik.services import extract_barcodes
+    >>> data = {"offers": [{"barcode": "1234567890"}, {"barcode": "0987654321"}]}
+    >>> barcodes = extract_barcodes(data)
+    >>> print(barcodes)
+    ['1234567890', '0987654321']
+"""
+
+from decimal import Decimal
 from typing import Any
+
+from pythonchik.events.eventbus import EventBus
+from pythonchik.events.events import Event, EventType
 
 
 def extract_addresses(data: dict[str, Any], event_bus=None) -> list[str]:
@@ -34,8 +66,12 @@ def extract_addresses(data: dict[str, Any], event_bus=None) -> list[str]:
     for i, catalog in enumerate(catalogs):
         try:
             if catalog.get("target_regions"):
+                if not isinstance(catalog["target_regions"], list):
+                    raise TypeError("target_regions должен быть списком")
                 addresses.append(catalog["target_regions"][0])
             else:
+                if not isinstance(catalog.get("target_shops", []), list):
+                    raise TypeError("target_shops должен быть списком")
                 addresses.append(catalog["target_shops"][0])
 
             if event_bus:
@@ -214,7 +250,7 @@ def analyze_price_differences(data: dict[str, Any]) -> tuple[list[float], int, i
             raise KeyError(f"Missing 'price_new' field for offer: {offer['description']}")
 
         price = offer["price_new"]
-        if not isinstance(price, (int | float)):
+        if not isinstance(price, (int, float, Decimal)):
             raise ValueError(f"Invalid price value for {offer['description']}: {price}")
         if price < 0:
             raise ValueError("Negative price value")

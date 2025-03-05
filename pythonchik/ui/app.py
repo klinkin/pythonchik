@@ -22,7 +22,15 @@ import customtkinter as ctk
 import matplotlib.pyplot as plt
 
 from pythonchik import config
-from pythonchik.core import ApplicationCore
+from pythonchik.core.application_core import ApplicationCore
+from pythonchik.core.application_state import ApplicationState
+from pythonchik.events.eventbus import EventBus
+from pythonchik.events.events import Event, EventType
+from pythonchik.events.handlers import (
+    ProgressEventHandler,
+    StateChangeHandler,
+    TaskEventHandler,
+)
 from pythonchik.services import (
     analyze_price_differences,
     check_coordinates_match,
@@ -31,15 +39,14 @@ from pythonchik.services import (
     extract_addresses,
     extract_barcodes,
 )
-from pythonchik.ui.frames import ActionMenuFrame, LogFrame, ResultFrame, SideBarFrame, StatusFrame
+from pythonchik.ui.frames import ActionMenuFrame, LogFrame, ResultFrame, SideBarFrame, StateFrame
 from pythonchik.utils import (
     create_archive,
     load_json_file,
     save_to_csv,
 )
-from pythonchik.utils.error_context import ErrorContext, ErrorSeverity
-from pythonchik.utils.event_system import Event, EventBus, EventType
 from pythonchik.utils.image import ImageProcessor
+from pythonchik.utils.metrics import MetricsCollector
 from pythonchik.utils.settings import SettingsManager
 
 
@@ -50,7 +57,7 @@ class ModernApp(ctk.CTk):
     взаимодействие между компонентами пользовательского интерфейса (UI) и бизнес-логикой.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, core: ApplicationCore, event_bus: EventBus) -> None:
         """Инициализирует главное окно приложения и все основные UI-компоненты.
 
         Запускает ApplicationCore (ядро), настраивает event_bus для подписки
@@ -65,8 +72,9 @@ class ModernApp(ctk.CTk):
         self.logger = logging.getLogger("pythonchik.ui.app")
 
         # Инициализация event_bus и ядро
-        self.event_bus = EventBus()
-        self.core = ApplicationCore(event_bus=self.event_bus)
+        self.event_bus = event_bus
+        self.core = core
+
         self.core.start()
 
         # Инициализируем менеджер настроек
@@ -85,14 +93,14 @@ class ModernApp(ctk.CTk):
         # Привязываем метод on_closing к системной кнопке закрытия
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
-        # Инициализируем обработчики событий (подписки тоже здесь)
-        self.setup_event_handlers()
-
         # Периодически проверяем фоновые задачи
         self.after(100, self.core.process_background_tasks)
 
         # Инициализация компонентов интерфейса
         self.setup_ui()
+
+        # Инициализируем обработчики событий (подписки тоже здесь)
+        self.setup_event_handlers()
 
         # Подключение UI-логирования (теперь log_frame уже существует)
         self.attach_ui_logger()
@@ -102,12 +110,16 @@ class ModernApp(ctk.CTk):
         if hasattr(self, "log_frame") and self.log_frame:
 
             class UIHandler(logging.Handler):
+                def __init__(self, log_frame):
+                    super().__init__()
+                    self.log_frame = log_frame
+
                 def emit(self, record):
                     level = record.levelname
                     msg = self.format(record)
-                    self.log_frame.log(msg, level)
+                    self.log_frame.log(msg)
 
-            ui_handler = UIHandler()
+            ui_handler = UIHandler(self.log_frame)
             ui_handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
             logging.getLogger().addHandler(ui_handler)
 
@@ -118,48 +130,49 @@ class ModernApp(ctk.CTk):
 
         Все подписки на EventBus находятся здесь.
         """
+        from pythonchik.errors.error_context import ErrorSeverity
+        from pythonchik.errors.error_handlers import UIErrorHandler
+        from pythonchik.events.handlers import EventHandler
 
-        def on_task_completed(event: Event) -> None:
-            """Обработчик события TASK_COMPLETED.
+        # Создаем класс-адаптер для обработки событий ошибок
+        class ErrorEventHandler(EventHandler):
+            def __init__(self, error_handler: UIErrorHandler):
+                self.error_handler = error_handler
 
-            Args:
-                event (Event): Событие, содержащее данные о результате (`event.data["result"]`).
-            """
-            result = event.data.get("result")
-            self.logger.info(f"Task completed with result: {result}")
-            # Здесь можно обновить UI, показать уведомление и т.д.
+            def handle(self, event: Event) -> None:
+                if event.type != EventType.ERROR_OCCURRED:
+                    return
 
-        def on_error_occurred(event: Event) -> None:
-            """Обработчик события ERROR_OCCURRED.
+                error = (
+                    event.data.get("error", Exception("Unknown error"))
+                    if event.data
+                    else Exception("Unknown error")
+                )
+                context = event.data.get("context", {}) if event.data else {}
+                operation = context.get("operation", "UI Operation") if context else "UI Operation"
 
-            Args:
-                event (Event): Событие об ошибке, внутри `event.data["error"]`.
-            """
-            error_msg = event.data.get("error", "Unknown error")
-            self.logger.error(f"Error occurred: {error_msg}")
-            mb.showerror("Ошибка", f"Произошла ошибка: {error_msg}")
+                self.error_handler.handle_error(
+                    error=error,
+                    operation=operation,
+                    severity=ErrorSeverity.ERROR,
+                    additional_context=event.data,
+                )
 
-        def on_state_changed(event: Event) -> None:
-            """Обработчик события STATE_CHANGED.
+        # Подписываемся на событие TASK_COMPLETED
+        task_handler = TaskEventHandler(self.result_frame, self.log_frame)
+        self.event_bus.subscribe(EventType.TASK_COMPLETED, task_handler)
 
-            Args:
-                event (Event): Событие, содержащее новое состояние в `event.data["state"]`.
-            """
-            new_state = event.data.get("state")
-            self.logger.info(f"Application state changed to: {new_state}")
-            # Можно обновить статус-бары, заголовки и т.д.
+        # Подписываемся на событие ERROR_OCCURRED
+        error_handler = UIErrorHandler()
+        self.event_bus.subscribe(EventType.ERROR_OCCURRED, ErrorEventHandler(error_handler))
 
-        # Подписываемся на основные события
-        self.event_bus.subscribe(EventType.TASK_COMPLETED, on_task_completed)
-        self.event_bus.subscribe(EventType.ERROR_OCCURRED, on_error_occurred)
-        self.event_bus.subscribe(EventType.STATE_CHANGED, on_state_changed)
+        # Подписываемся на событие PROGRESS_UPDATED
+        progress_handler = ProgressEventHandler(self.result_frame, self.log_frame)
+        self.event_bus.subscribe(EventType.PROGRESS_UPDATED, progress_handler)
 
-        # Пример подписки на UI_ACTION (если нужно):
-        # def on_ui_action(event: Event) -> None:
-        #     """Обработчик событий UI_ACTION."""
-        #     # Вызвать какие-то UI-действия или бизнес-логику
-        #     pass
-        # self.event_bus.subscribe(EventType.UI_ACTION, on_ui_action)
+        # Подписываемся на событие STATE_CHANGED
+        state_handler = StateChangeHandler(self.state_frame)
+        self.event_bus.subscribe(EventType.STATE_CHANGED, state_handler)
 
     def on_closing(self) -> None:
         """Вызывается при закрытии окна (например, по кнопке 'X').
@@ -168,29 +181,25 @@ class ModernApp(ctk.CTk):
         """
 
         # Логируем факт закрытия
-        self.logger.info("Application is closing...")
+        self.logger.info("Получен сигнал на закрытие приложения")
 
         # (Опционально) спрашиваем подтверждение
         if not mb.askokcancel("Выход", "Точно хотите закрыть приложение?"):
             return
 
+        self.core.state_manager.update_state(ApplicationState.SHUTTING_DOWN)
+
         # Сохраняем настройки (если что-то меняли)
         self.settings_manager.save_settings()
-
         # Останавливаем ядро (и ждём, пока поток завершится)
         self.core.stop()
-        if self.core._worker_thread is not None and self.core._worker_thread.is_alive():
-            self.core._worker_thread.join(timeout=2)
-
-        # Очистка других ресурсов (файлы, соединения)
-        # close_all_files() ...
-        # db_connection.close() ...
-
         # Закрываем окно
         self.destroy()
 
     def setup_ui(self) -> None:
-        """Создаёт и конфигурирует все основные UI-компоненты.
+        """Настройка компонентов интерфейса.
+
+        Создаёт и размещает основные UI компоненты в окне приложения.
 
         Включает:
         - Фрейм навигации (SideBarFrame)
@@ -211,6 +220,7 @@ class ModernApp(ctk.CTk):
         self.grid_columnconfigure(1, weight=0)
         self.grid_columnconfigure(2, weight=1)
 
+        # Создаем главные фреймы
         # Фрейм меню действий
         self.action_menu = ActionMenuFrame(
             self,
@@ -237,15 +247,16 @@ class ModernApp(ctk.CTk):
         self.log_frame.grid(row=1, column=1, columnspan=2, sticky="nsew", padx=20, pady=(0, 10))
 
         # Фрейм статуса
-        self.status_frame = StatusFrame(self, self.event_bus)
-        self.status_frame.grid(row=2, column=0, columnspan=3, sticky="ew", padx=20, pady=(0, 10))
+        self.state_frame = StateFrame(self)
+        self.state_frame.grid(row=2, column=0, columnspan=3, sticky="ew", padx=20, pady=(0, 10))
 
         # Настройка навигационных кнопок
         self.navigation_frame.set_button_commands(
-            self.show_json_tab,
-            self.show_image_tab,
-            self.show_analysis_tab,
-            self.change_appearance_mode,
+            json_command=self.show_json_tab,
+            image_command=self.show_image_tab,
+            analysis_command=self.show_analysis_tab,
+            metric_command=self.show_metrics,
+            theme_command=self.change_appearance_mode,
         )
 
         # Показ начального фрейма
@@ -263,6 +274,22 @@ class ModernApp(ctk.CTk):
         """Переключается на вкладку анализа."""
         self.select_frame_by_name("analysis")
 
+    def show_metrics(self):
+        """Показывает метрики производительности приложения."""
+        # Отображаем метрики во фрейме результатов
+        self.result_frame.show_metrics()
+
+        # Скрываем фрейм меню действий и показываем только фрейм результатов
+        self.action_menu.grid_remove()
+        self.result_frame.grid(row=0, column=1, columnspan=2, sticky="nsew", padx=20, pady=20)
+
+        # Обновляем заголовок
+        if hasattr(self.result_frame, "header_label"):
+            self.result_frame.header_label.configure(text="Метрики производительности")
+
+        # Выделяем вкладку Метрик в боковой панели
+        self.navigation_frame.select_tab("metric")
+
     def change_appearance_mode(self, new_appearance_mode: str) -> None:
         """Изменяет текущую тему приложения.
 
@@ -271,9 +298,10 @@ class ModernApp(ctk.CTk):
                 ('Светлая', 'Тёмная', 'Системная').
         """
         mode_map = {"Светлая": "light", "Тёмная": "dark", "Системная": "system"}
-        theme = mode_map[new_appearance_mode]
-        ctk.set_appearance_mode(theme)
-        self.settings_manager.set_theme(theme)
+        theme = mode_map.get(new_appearance_mode)
+        if theme:
+            ctk.set_appearance_mode(theme)
+            self.settings_manager.set_theme(theme)
 
     def select_frame_by_name(self, name: str) -> None:
         """Отображает выбранный фрейм содержимого и очищает лог/result фреймы.
@@ -282,6 +310,14 @@ class ModernApp(ctk.CTk):
             name (str): Имя фрейма для отображения ('json', 'image', 'analysis').
         """
         self.navigation_frame.select_tab(name)
+
+        # Восстанавливаем видимость action_menu и правильное расположение фреймов
+        self.action_menu.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
+        self.result_frame.grid(row=0, column=2, sticky="nsew", padx=20, pady=20)
+
+        # Восстанавливаем стандартный заголовок для result_frame
+        if hasattr(self.result_frame, "header_label"):
+            self.result_frame.header_label.configure(text="Результат")
 
         if name == "json":
             self.action_menu.show_json_section()
@@ -293,35 +329,6 @@ class ModernApp(ctk.CTk):
         self.result_frame.clear()
         self.log_frame.clear_log()
 
-    def _handle_error(self, error: Exception, operation: str) -> None:
-        """Обрабатывает ошибку, возникшую при выполнении конкретной операции.
-
-        Args:
-            error (Exception): Возникшее исключение.
-            operation (str): Название операции, при выполнении которой произошла ошибка.
-        """
-        error_msg = f"Ошибка при {operation}: {str(error)}"
-        self.log_frame.log(error_msg)
-        mb.showerror("Ошибка", error_msg)
-
-    def _track_progress(self, total_items: int, operation: str):
-        """Создаёт функцию обновления прогресса для длительных операций.
-
-        Args:
-            total_items (int): Общее количество элементов для обработки.
-            operation (str): Название операции.
-
-        Returns:
-            Callable[[int, str], None]: Функция, принимающая текущий индекс
-            обработки и необязательное сообщение, и обновляющая прогресс.
-        """
-
-        def update(current: int, message: str = "") -> None:
-            progress = int((current / total_items) * 100)
-            self.update_progress(progress, f"{operation}: {message}")
-
-        return update
-
     def extract_addresses(self) -> None:
         """Извлекает и сохраняет адреса из выбранных JSON-файлов."""
         try:
@@ -330,39 +337,86 @@ class ModernApp(ctk.CTk):
                 self.log_frame.log("Пожалуйста, выберите JSON файл(ы)")
                 return
 
-            self.log_frame.log("Начало обработки файлов")
+            self.log_frame.log("Начало извлечения адресов...")
+            self.result_frame.update_progress(0, "Начало извлечения адресов...")
 
             def task():
-                addresses = []
-                for file_path in files:
-                    data = load_json_file(str(file_path))
-                    result = extract_addresses(data)
-                    addresses.extend(result)
+                try:
+                    addresses = []
+                    total_files = len(files)
 
-                if addresses:
-                    output_path = config.get_unique_filename(
-                        Path(files[-1]).stem, config.ADDRESSES_SUFFIX, ".csv"
+                    for idx, file_path in enumerate(files, 1):
+                        progress = int((idx / total_files) * 100)
+
+                        self.event_bus.publish(
+                            Event(
+                                EventType.PROGRESS_UPDATED,
+                                {
+                                    "progress": progress,
+                                    "message": f"Обработка файла {idx}/{total_files}: {Path(file_path).name}",
+                                },
+                            )
+                        )
+
+                        data = load_json_file(str(file_path))
+                        result = extract_addresses(data, self.event_bus)
+                        addresses.extend(result)
+
+                    if addresses:
+                        output_path = config.get_unique_filename(
+                            Path(files[-1]).stem, config.ADDRESSES_SUFFIX, ".csv"
+                        )
+                        save_to_csv(addresses, ["Адрес"], str(output_path))
+                        self.log_frame.log(f"Адреса сохранены в файл: {output_path}")
+                        message = f"Найдено {len(addresses)} адресов"
+                        self.result_frame.show_text(message)
+                    else:
+                        self.log_frame.log("Адреса не найдены в выбранных файлах")
+
+                    self.event_bus.publish(
+                        Event(
+                            EventType.PROGRESS_UPDATED,
+                            {"progress": 100, "message": "Операция завершена!"},
+                        )
                     )
-                    save_to_csv(addresses, ["Адрес"], str(output_path))
                     return addresses
-                return []
+                except Exception as e:
+                    from pythonchik.errors.error_context import ErrorSeverity
+                    from pythonchik.errors.error_handlers import DataProcessingErrorHandler
 
-            # self.core.handle_task(
-            #     task,
-            #     description="Извлечение адресов",
-            #     on_complete=lambda result: (
-            #         self.result_frame.show_text("\n".join(result)) if result else None,
-            #         (
-            #             self.log_frame.log("Адреса успешно извлечены!")
-            #             if result
-            #             else self.log_frame.log("Адреса не найдены")
-            #         ),
-            #     ),
-            # )
-            self.core.add_task(task)
+                    error_handler = DataProcessingErrorHandler()
+                    error_handler.handle_error(
+                        error=e,
+                        operation="Извлечение адресов",
+                        severity=ErrorSeverity.ERROR,
+                        recovery_action="Проверьте структуру JSON файла",
+                        additional_context={"files": [str(f) for f in files if files]},
+                    )
+                    self.event_bus.publish(
+                        Event(
+                            EventType.PROGRESS_UPDATED,
+                            {"progress": 0, "message": ""},
+                        )
+                    )
+                    self.log_frame.log(f"Ошибка при извлечении адресов: {str(e)}", "ERROR")
+                    raise
+
+            self.core.add_task(task, "Задача извлечения адресов")
 
         except Exception as e:
-            self._handle_error(e, "извлечении адресов")
+            from pythonchik.errors.error_context import ErrorSeverity
+            from pythonchik.errors.error_handlers import UIErrorHandler
+
+            error_handler = UIErrorHandler()
+            error_handler.handle_error(
+                error=e,
+                operation="Извлечение адресов",
+                severity=ErrorSeverity.ERROR,
+                recovery_action="Проверьте выбранные файлы и повторите операцию",
+                additional_context={"files": [str(f) for f in files if files]},
+            )
+            mb.showerror("Ошибка", f"Ошибка при извлечении адресов: {str(e)}")
+            self.log_frame.log(f"Ошибка: {str(e)}", "ERROR")
 
     def compress_images(self) -> None:
         """Сжимает выбранные изображения и архивирует результат."""
@@ -373,18 +427,57 @@ class ModernApp(ctk.CTk):
                 return
 
             self.log_frame.log("Начало процесса сжатия изображений")
-            output_dir = Path(config.COMPRESSED_IMAGES_DIR)
-            output_dir.mkdir(exist_ok=True)
+            self.result_frame.update_progress(0, "Начало процесса сжатия изображений")
 
-            processed_files = ImageProcessor.compress_multiple_images(list(files), str(output_dir))
-            archive_path = config.get_archive_path()
-            create_archive(processed_files, archive_path)
-            shutil.rmtree(output_dir)
+            def task():
+                try:
+                    output_dir = Path(config.COMPRESSED_IMAGES_DIR)
+                    output_dir.mkdir(exist_ok=True)
 
-            self.log_frame.log("Процесс сжатия изображений успешно завершен!")
+                    self.result_frame.update_progress(20, "Сжатие изображений...")
+                    processed_files = ImageProcessor.compress_multiple_images(list(files), str(output_dir))
+
+                    self.result_frame.update_progress(60, "Создание архива...")
+                    archive_path = config.get_archive_path()
+                    create_archive([str(file) for file in processed_files], str(archive_path))
+
+                    self.result_frame.update_progress(90, "Очистка временных файлов...")
+                    shutil.rmtree(output_dir)
+
+                    self.result_frame.update_progress(100, "Операция завершена!")
+                    return processed_files
+                except Exception as e:
+                    from pythonchik.errors.error_context import ErrorSeverity
+                    from pythonchik.errors.error_handlers import ImageProcessingErrorHandler
+
+                    error_handler = ImageProcessingErrorHandler()
+                    error_handler.handle_error(
+                        error=e,
+                        operation="Сжатие изображений",
+                        severity=ErrorSeverity.ERROR,
+                        recovery_action="Проверьте выбранные файлы и права доступа",
+                        additional_context={"files": [str(f) for f in files if files]},
+                    )
+                    self.result_frame.update_progress(0, "")
+                    self.log_frame.log(f"Ошибка при сжатии изображений: {str(e)}", "ERROR")
+                    raise
+
+            self.core.add_task(task)
 
         except Exception as e:
-            self._handle_error(e, "сжатии изображений")
+            from pythonchik.errors.error_context import ErrorSeverity
+            from pythonchik.errors.error_handlers import UIErrorHandler
+
+            error_handler = UIErrorHandler()
+            error_handler.handle_error(
+                error=e,
+                operation="Сжатие изображений",
+                severity=ErrorSeverity.ERROR,
+                recovery_action="Проверьте выбранные файлы и повторите операцию",
+                additional_context={"files": [str(f) for f in files if files]},
+            )
+            mb.showerror("Ошибка", f"Ошибка при сжатии изображений: {str(e)}")
+            self.log_frame.log(f"Ошибка: {str(e)}", "ERROR")
 
     def check_coordinates(self) -> None:
         """Проверяет и формирует отчёт о соответствии адресов и координат."""
@@ -395,89 +488,151 @@ class ModernApp(ctk.CTk):
                 return
 
             self.log_frame.log("Начало проверки соответствия адресов и координат...")
-            progress_update = self._track_progress(len(files), "Проверка координат")
+            self.result_frame.update_progress(0, "Начало проверки соответствия адресов и координат...")
 
-            no_coords_list = []
-            total_catalogs = 0
-            total_coords = 0
-            matched_count = 0
+            def task():
+                try:
+                    no_coords_list = []
+                    total_catalogs = 0
+                    total_coords = 0
+                    matched_count = 0
+                    total_files = len(files)
 
-            for index, file_path in enumerate(files, 1):
-                progress_update(index, f"Обработка файла: {Path(file_path).name}")
-                data = load_json_file(file_path)
-                no_coords, catalogs, coords, matched = check_coordinates_match(data)
-                no_coords_list.extend(no_coords)
-                total_catalogs += catalogs
-                total_coords += coords
-                matched_count += matched
+                    for index, file_path in enumerate(files, 1):
+                        progress = int((index / total_files) * 100)
+                        self.result_frame.update_progress(
+                            progress, f"Обработка файла: {Path(file_path).name}"
+                        )
+                        data = load_json_file(file_path)
+                        no_coords, catalogs, coords, matched = check_coordinates_match(data)
+                        no_coords_list.extend(no_coords)
+                        total_catalogs += catalogs
+                        total_coords += coords
+                        matched_count += matched
 
-            info_message = (
-                f"Всего каталогов: {total_catalogs}\n"
-                f"Всего координат: {total_coords}\n"
-                f"Адресов с координатами: {matched_count}\n"
-                f"Адреса без координат:\n"
-                f"{', '.join(no_coords_list)}"
-            )
-            self.result_frame.show_text(info_message)
-            self.log_frame.log("Анализ соответствия адресов и координат завершен")
+                    info_message = (
+                        f"Всего каталогов: {total_catalogs}\n"
+                        f"Всего координат: {total_coords}\n"
+                        f"Адресов с координатами: {matched_count}\n"
+                        f"Адреса без координат:\n"
+                        f"{', '.join(no_coords_list)}"
+                    )
+                    self.result_frame.show_text(info_message)
+                    self.log_frame.log("Анализ соответствия адресов и координат завершен")
 
-            if no_coords_list:
-                output_path = config.get_unique_filename(
-                    Path(files[-1]).stem, config.NO_COORDINATES_SUFFIX, ".csv"
-                )
-                save_to_csv(no_coords_list, ["Адреса без координат"], str(output_path))
-                self.log_frame.log(f"Адреса без координат сохранены в файл: {output_path}")
+                    if no_coords_list:
+                        output_path = config.get_unique_filename(
+                            Path(files[-1]).stem, config.NO_COORDINATES_SUFFIX, ".csv"
+                        )
+                        save_to_csv(no_coords_list, ["Адреса без координат"], str(output_path))
+                        self.log_frame.log(f"Адреса без координат сохранены в файл: {output_path}")
+
+                    self.result_frame.update_progress(100, "Операция завершена!")
+                    return info_message
+                except Exception as e:
+                    from pythonchik.errors.error_context import ErrorSeverity
+                    from pythonchik.errors.error_handlers import DataProcessingErrorHandler
+
+                    error_handler = DataProcessingErrorHandler()
+                    error_handler.handle_error(
+                        error=e,
+                        operation="Проверка координат",
+                        severity=ErrorSeverity.ERROR,
+                        recovery_action="Проверьте структуру JSON файла",
+                        additional_context={"files": [str(f) for f in files if files]},
+                    )
+                    self.result_frame.update_progress(0, "")
+                    self.log_frame.log(f"Ошибка при проверке координат: {str(e)}", "ERROR")
+                    raise
+
+            self.core.add_task(task)
 
         except Exception as e:
-            self._handle_error(e, "проверке координат")
-        finally:
-            self.reset_progress()
+            from pythonchik.errors.error_context import ErrorSeverity
+            from pythonchik.errors.error_handlers import UIErrorHandler
+
+            error_handler = UIErrorHandler()
+            error_handler.handle_error(
+                error=e,
+                operation="Проверка координат",
+                severity=ErrorSeverity.ERROR,
+                recovery_action="Проверьте выбранные файлы и повторите операцию",
+                additional_context={"files": [str(f) for f in files if files]},
+            )
+            mb.showerror("Ошибка", f"Ошибка при проверке координат: {str(e)}")
+            self.log_frame.log(f"Ошибка: {str(e)}", "ERROR")
 
     def extract_barcodes(self) -> None:
         """Извлекает штрих-коды из выбранных JSON-файлов и сохраняет в CSV."""
-        files = fd.askopenfilenames(filetypes=config.JSON_FILE_TYPES)
-        if not files:
-            self.log_frame.log("Пожалуйста, выберите JSON файл(ы)")
-            return
-
         try:
+            files = fd.askopenfilenames(filetypes=config.JSON_FILE_TYPES)
+            if not files:
+                self.log_frame.log("Пожалуйста, выберите JSON файл(ы)")
+                return
+
             self.log_frame.log("Начало извлечения штрих-кодов...")
-            self.log_frame.log(f"Выбрано {len(files)} файлов для обработки")
-            total_files = len(files)
+            self.result_frame.update_progress(0, "Начало извлечения штрих-кодов...")
 
-            barcodes = []
-            for index, file_path in enumerate(files, 1):
-                progress = int((index / total_files) * 80)
-                self.update_progress(
-                    progress, f"Обработка файла {index}/{total_files}: {Path(file_path).name}"
-                )
-                self.log_frame.log(f"Анализ файла: {Path(file_path).name}")
+            def task():
+                try:
+                    all_barcodes = []
+                    total_files = len(files)
 
-                data = load_json_file(file_path)
-                result = extract_barcodes(data)
-                barcodes.extend(result)
-                self.log_frame.log(f"Найдено {len(result)} штрих-кодов в файле")
+                    for idx, file_path in enumerate(files, 1):
+                        progress = int((idx / total_files) * 100)
+                        self.result_frame.update_progress(
+                            progress, f"Обработка файла {idx}/{total_files}: {Path(file_path).name}"
+                        )
 
-            if barcodes:
-                self.update_progress(90, "Сохранение результатов...")
-                output_path = config.get_unique_filename(Path(files[-1]).stem, config.BARCODE_SUFFIX, ".csv")
-                save_to_csv(barcodes, ["Штрих-код"], str(output_path))
-                self.log_frame.log(f"Штрих-коды сохранены в файл: {output_path}")
-                self.result_frame.show_text("\n".join(barcodes))
-                self.update_progress(100, "Готово!")
-                self.log_frame.log(f"Всего извлечено {len(barcodes)} уникальных штрих-кодов")
-            else:
-                self.log_frame.log("Штрих-коды не найдены в выбранных файлах")
+                        data = load_json_file(str(file_path))
+                        barcodes = extract_barcodes(data)
+                        all_barcodes.extend(barcodes)
 
-        except (FileNotFoundError, PermissionError) as e:
-            error_msg = f"Ошибка доступа к файлам: {str(e)}"
-            self.log_frame.log(error_msg)
-        except (KeyError, ValueError, TypeError) as e:
-            error_msg = f"Ошибка обработки данных: {str(e)}"
-            self.log_frame.log(error_msg)
-        finally:
-            self.update_progress(0)
-            self.log_frame.log("Процесс завершен")
+                    if all_barcodes:
+                        output_path = config.get_unique_filename(
+                            Path(files[-1]).stem, config.BARCODES_SUFFIX, ".csv"
+                        )
+                        save_to_csv(all_barcodes, ["Штрих-код"], str(output_path))
+                        self.log_frame.log(f"Штрих-коды сохранены в файл: {output_path}")
+                        message = f"Найдено {len(all_barcodes)} штрих-кодов"
+                        self.result_frame.show_text(message)
+                    else:
+                        self.log_frame.log("Штрих-коды не найдены в выбранных файлах")
+
+                    self.result_frame.update_progress(100, "Операция завершена!")
+                    return all_barcodes
+                except Exception as e:
+                    from pythonchik.errors.error_context import ErrorSeverity
+                    from pythonchik.errors.error_handlers import DataProcessingErrorHandler
+
+                    error_handler = DataProcessingErrorHandler()
+                    error_handler.handle_error(
+                        error=e,
+                        operation="Извлечение штрих-кодов",
+                        severity=ErrorSeverity.ERROR,
+                        recovery_action="Проверьте структуру JSON файла",
+                        additional_context={"files": [str(f) for f in files if files]},
+                    )
+                    self.result_frame.update_progress(0, "")
+                    self.log_frame.log(f"Ошибка при извлечении штрих-кодов: {str(e)}", "ERROR")
+                    raise
+
+            self.core.add_task(task)
+
+        except Exception as e:
+            from pythonchik.errors.error_context import ErrorSeverity
+            from pythonchik.errors.error_handlers import UIErrorHandler
+
+            error_handler = UIErrorHandler()
+            error_handler.handle_error(
+                error=e,
+                operation="Извлечение штрих-кодов",
+                severity=ErrorSeverity.ERROR,
+                recovery_action="Проверьте выбранные файлы и повторите операцию",
+                additional_context={"files": [str(f) for f in files if files]},
+            )
+            mb.showerror("Ошибка", f"Ошибка при извлечении штрих-кодов: {str(e)}")
+            self.log_frame.log(f"Ошибка: {str(e)}", "ERROR")
 
     def write_test_json(self) -> None:
         """Создаёт тестовый JSON-файл из выбранного JSON."""
@@ -503,7 +658,19 @@ class ModernApp(ctk.CTk):
             self.log_frame.log("Операция успешно завершена!")
             mb.showinfo("Успех", "Тестовый JSON успешно создан!")
         except Exception as exc:
-            self._handle_error(exc, "создании тестового JSON")
+            from pythonchik.errors.error_context import ErrorSeverity
+            from pythonchik.errors.error_handlers import UIErrorHandler
+
+            error_handler = UIErrorHandler()
+            error_handler.handle_error(
+                error=exc,
+                operation="Создание тестового JSON",
+                severity=ErrorSeverity.ERROR,
+                recovery_action="Проверьте структуру исходного JSON файла",
+                additional_context={"file": files[0] if files else "Файл не выбран"},
+            )
+            mb.showerror("Ошибка", f"Не удалось создать тестовый JSON: {str(exc)}")
+            self.log_frame.log(f"Ошибка: {str(exc)}", "ERROR")
 
     def convert_image_format(self) -> None:
         """Конвертирует выбранные изображения в формат PNG."""
@@ -542,7 +709,9 @@ class ModernApp(ctk.CTk):
 
             for index, file in enumerate(files, 1):
                 progress = int((index / total_files) * 80)
-                self.update_progress(progress, f"Обработка файла {index}/{total_files}: {Path(file).name}")
+                self.result_frame.update_progress(
+                    progress, f"Обработка файла {index}/{total_files}: {Path(file).name}"
+                )
                 self.log_frame.log(f"Анализ файла: {Path(file).name}")
 
                 data = load_json_file(file)
@@ -550,21 +719,33 @@ class ModernApp(ctk.CTk):
                 total_count += len(offers)
                 unique_descriptions.update(offer["description"] for offer in offers if "description" in offer)
 
-            self.update_progress(90, "Подсчет итоговых результатов...")
+            self.result_frame.update_progress(90, "Подсчет итоговых результатов...")
             unique_count = len(unique_descriptions)
 
             result_message = f"Всего предложений: {total_count}\n" f"Уникальных предложений: {unique_count}"
             self.log_frame.log("Анализ завершен.")
             self.log_frame.log(result_message)
             self.result_frame.show_text(result_message)
-            self.update_progress(100, "Готово!")
+            self.result_frame.update_progress(100, "Готово!")
 
         except (KeyError, ValueError, TypeError, FileNotFoundError) as e:
+            from pythonchik.errors.error_context import ErrorSeverity
+            from pythonchik.errors.error_handlers import DataProcessingErrorHandler
+
+            error_handler = DataProcessingErrorHandler()
+            error_handler.handle_error(
+                error=e,
+                operation="Подсчет предложений",
+                severity=ErrorSeverity.ERROR,
+                recovery_action="Проверьте структуру JSON файла",
+                additional_context={"files": [str(f) for f in files if files]},
+            )
             error_message = f"Ошибка: {str(e)}"
             self.log_frame.log(error_message, "ERROR")
-            self.update_progress(0)
+            mb.showerror("Ошибка", error_message)
+            self.result_frame.update_progress(0, "")
         finally:
-            self.update_progress(0)
+            self.result_frame.update_progress(0, "")
 
     def compare_prices(self) -> None:
         """Анализирует и визуализирует различия цен в выбранных JSON-файлах."""
@@ -582,10 +763,10 @@ class ModernApp(ctk.CTk):
             total_count = 0
             total_offers = 0
 
-            self.update_progress(0, "Начало обработки файлов...")
+            self.result_frame.update_progress(0, "Начало обработки файлов...")
             for index, file_path in enumerate(files, 1):
                 progress = int((index / total_files) * 80)
-                self.update_progress(
+                self.result_frame.update_progress(
                     progress, f"Обработка файла {index}/{total_files}: {Path(file_path).name}"
                 )
                 self.log_frame.log(f"Анализ файла: {Path(file_path).name}")
@@ -598,7 +779,7 @@ class ModernApp(ctk.CTk):
                 self.log_frame.log(f"Найдено {diff_count} предложений с разными ценами в файле")
 
             if total_offers > 0:
-                self.update_progress(90, "Создание графика...")
+                self.result_frame.update_progress(90, "Создание графика...")
                 percentage = int(total_count * 100 / total_offers)
                 fig = plt.figure(figsize=config.PRICE_PLOT_SIZE)
                 plt.hist(price_diffs, bins=config.PRICE_PLOT_BINS)
@@ -615,30 +796,40 @@ class ModernApp(ctk.CTk):
                 self.log_frame.log("Анализ завершен.")
                 self.log_frame.log(result_message)
 
-                self.update_progress(100, "Готово!")
+                self.result_frame.update_progress(100, "Готово!")
             else:
                 self.log_frame.log("Предложения не найдены в выбранных файлах")
 
         except (FileNotFoundError, PermissionError) as e:
+            from pythonchik.errors.error_context import ErrorSeverity
+            from pythonchik.errors.error_handlers import FileProcessingErrorHandler
+
+            error_handler = FileProcessingErrorHandler()
+            error_handler.handle_error(
+                error=e,
+                operation="Доступ к файлам для анализа цен",
+                severity=ErrorSeverity.ERROR,
+                recovery_action="Проверьте наличие и доступность выбранных файлов",
+                additional_context={"files": [str(f) for f in files if files]},
+            )
             error_msg = f"Ошибка доступа к файлам: {str(e)}"
-            self.log_frame.log(error_msg)
+            self.log_frame.log(error_msg, "ERROR")
+            mb.showerror("Ошибка", error_msg)
         except (KeyError, ValueError, TypeError) as e:
+            from pythonchik.errors.error_context import ErrorSeverity
+            from pythonchik.errors.error_handlers import DataProcessingErrorHandler
+
+            error_handler = DataProcessingErrorHandler()
+            error_handler.handle_error(
+                error=e,
+                operation="Обработка данных для анализа цен",
+                severity=ErrorSeverity.ERROR,
+                recovery_action="Проверьте структуру JSON файла",
+                additional_context={"files": [str(f) for f in files if files]},
+            )
             error_msg = f"Ошибка обработки данных: {str(e)}"
-            self.log_frame.log(error_msg)
+            self.log_frame.log(error_msg, "ERROR")
+            mb.showerror("Ошибка", error_msg)
         finally:
-            self.reset_progress()
+            self.result_frame.update_progress(0, "")
             self.log_frame.log("Процесс завершен")
-
-    def update_progress(self, progress: int, message: str = "") -> None:
-        """Обновляет индикатор прогресса и сообщение в фрейме результатов.
-
-        Args:
-            progress (int): Процент выполнения (0..100).
-            message (str, optional): Статусное сообщение для отображения.
-        """
-        self.result_frame.update_progress(progress, message)
-        self.log_frame.log(message)
-
-    def reset_progress(self) -> None:
-        """Сбрасывает индикатор прогресса в исходное состояние."""
-        self.result_frame.reset_progress()

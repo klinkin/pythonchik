@@ -1,3 +1,6 @@
+from decimal import Decimal
+from typing import Any
+
 import pytest
 
 from pythonchik.services import (
@@ -8,57 +11,69 @@ from pythonchik.services import (
     extract_addresses,
     extract_barcodes,
 )
-from pythonchik.types import CatalogData
+from pythonchik.types import Catalog, CatalogData, Offer
 
 
 @pytest.fixture
-def sample_data() -> CatalogData:
-    return {
-        "catalogs": [
-            {
-                "target_regions": ["Moscow Region"],
-                "target_shops": ["Shop A"],
-                "offers": ["offer1", "offer2"],
-            },
-            {
-                "target_regions": ["Saint Petersburg"],
-                "target_shops": ["Shop B"],
-                "offers": ["offer3", "offer4"],
-            },
-            {"target_regions": ["Shop C Region"], "target_shops": ["Shop C"], "offers": ["offer5"]},
+def sample_data() -> dict:
+    data: CatalogData = CatalogData(
+        catalogs=[
+            Catalog(
+                target_regions=["Moscow Region"],
+                target_shops=["Shop A"],
+                offers=["offer1", "offer2"],
+            ),
+            Catalog(
+                target_regions=["Saint Petersburg"],
+                target_shops=["Shop B"],
+                offers=["offer3", "offer4"],
+            ),
+            Catalog(
+                target_regions=["Shop C Region"],
+                target_shops=["Shop C"],
+                offers=["offer5"],
+            ),
         ],
-        "offers": [
-            {
-                "id": "offer1",
-                "description": "Product A",
-                "barcode": "123456789",
-                "price_new": 100,
-                "price_old": 120,
-            },
-            {
-                "id": "offer2",
-                "description": "Product A",
-                "barcode": "987654321",
-                "price_new": 150,
-                "price_old": 180,
-            },
-            {
-                "id": "offer3",
-                "description": "Product B",
-                "barcode": "456789123",
-                "price_new": 200,
-            },
-            {"id": "offer4", "description": "Product C", "barcode": "654321789", "price_new": 300},
-            {
-                "id": "offer5",
-                "description": "Product D",
-                "barcode": "789123456",
-                "price_new": 400,
-                "price_old": 450,
-            },
+        offers=[
+            Offer(
+                id="offer1",
+                description="Product A",
+                barcode="123456789",
+                price_new=Decimal("100"),
+                price_old=Decimal("120"),
+            ),
+            Offer(
+                id="offer2",
+                description="Product A",
+                barcode="987654321",
+                price_new=Decimal("150"),
+                price_old=Decimal("180"),
+            ),
+            Offer(
+                id="offer3",
+                description="Product B",
+                barcode="456789123",
+                price_new=Decimal("200"),
+                price_old=None,
+            ),
+            Offer(
+                id="offer4",
+                description="Product C",
+                barcode="654321789",
+                price_new=Decimal("300"),
+                price_old=None,
+            ),
+            Offer(
+                id="offer5",
+                description="Product D",
+                barcode="789123456",
+                price_new=Decimal("400"),
+                price_old=Decimal("450"),
+            ),
         ],
-        "target_shops_coords": ["Shop A", "Shop B"],
-    }
+        target_shops_coords=["Shop A", "Shop B"],
+    )
+    return data.model_dump()
 
 
 def test_extract_addresses_with_target_regions(sample_data):
@@ -102,8 +117,9 @@ def test_check_coordinates_match_empty_data():
 
 
 def test_check_coordinates_match_invalid_data():
+    invalid_data: Any = []
     with pytest.raises(ValueError, match="Входные данные должны быть словарем"):
-        check_coordinates_match([])
+        check_coordinates_match(invalid_data)
 
     with pytest.raises(ValueError, match="Отсутствует обязательное поле: catalogs"):
         check_coordinates_match({})
@@ -138,8 +154,9 @@ def test_count_unique_offers_empty_data():
 
 
 def test_count_unique_offers_invalid_data():
+    invalid_data: Any = []
     with pytest.raises(ValueError, match="Входные данные должны быть словарем"):
-        count_unique_offers([])
+        count_unique_offers(invalid_data)
 
     with pytest.raises(ValueError, match="Отсутствует поле 'offers'"):
         count_unique_offers({})
@@ -159,6 +176,12 @@ def test_create_test_json_success(sample_data):
 def test_create_test_json_empty_data():
     result = create_test_json({})
     assert result == {"catalogs": [], "offers": [], "target_shops_coords": []}
+
+
+def test_create_test_json_missing_offers():
+    data = {"catalogs": [{"target_regions": ["Region"]}]}
+    result = create_test_json(data)
+    assert result["catalogs"][0].get("offers") is None
 
 
 def test_analyze_price_differences_success(sample_data):
@@ -186,3 +209,9 @@ def test_analyze_price_differences_invalid_data():
 def test_analyze_price_differences_empty_data():
     assert analyze_price_differences({}) == ([], 0, 0)
     assert analyze_price_differences({"offers": []}) == ([], 0, 0)
+
+
+def test_extract_addresses_invalid_data():
+    data = {"catalogs": [{"target_regions": "не список"}]}
+    with pytest.raises(TypeError):
+        extract_addresses(data)

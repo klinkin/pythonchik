@@ -15,7 +15,7 @@ from PIL import Image, ImageTk
 class ResultFrame(ctk.CTkFrame):
     """Фрейм для отображения результатов операций в прокручиваемом контейнере."""
 
-    def __init__(self, master: ctk.CTk | ctk.CTkFrame, **kwargs: dict[str, Any]) -> None:
+    def __init__(self, master: ctk.CTk | ctk.CTkFrame, **kwargs: Any) -> None:
         super().__init__(master, **kwargs)
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)  # Make content row expandable
@@ -41,14 +41,14 @@ class ResultFrame(ctk.CTkFrame):
         self.figure_container.grid_remove()
         self.figure_canvas = None
 
-        # Create progress bar and status label
+        # Create progress bar and state label
         self.progress_bar = ctk.CTkProgressBar(self)
         self.progress_bar.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 5))
         self.progress_bar.grid_remove()
 
-        self.status_label = ctk.CTkLabel(self, text="")
-        self.status_label.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 10))
-        self.status_label.grid_remove()
+        self.progress_label = ctk.CTkLabel(self, text="")
+        self.progress_label.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 10))
+        self.progress_label.grid_remove()
 
     def show_text(self, content: str) -> None:
         """Отображение текстового содержимого.
@@ -133,19 +133,19 @@ class ResultFrame(ctk.CTkFrame):
         self.figure_container.grid_remove()
 
     def update_progress(self, progress: int, message: str = "") -> None:
-        """Update the progress bar and status message.
+        """Update the progress bar and progress message.
 
         Args:
             progress: Progress percentage (0-100)
-            message: Optional status message to display
+            message: Optional message to display
         """
 
         def _update():
             self.progress_bar.grid()
-            self.status_label.grid()
+            self.progress_label.grid()
             self.progress_bar.set(progress / 100)
             if message:
-                self.status_label.configure(text=message)
+                self.progress_label.configure(text=message)
 
         # Schedule the update on the main thread
         self.after(0, _update)
@@ -155,9 +155,140 @@ class ResultFrame(ctk.CTkFrame):
 
         def _reset():
             self.progress_bar.grid_remove()
-            self.status_label.grid_remove()
+            self.progress_label.grid_remove()
             self.progress_bar.set(0)
-            self.status_label.configure(text="")
+            self.progress_label.configure(text="")
 
         # Schedule the reset on the main thread
         self.after(0, _reset)
+
+    def show_metrics(self) -> None:
+        """Отображает метрики производительности приложения.
+
+        Собирает и форматирует метрики из коллектора метрик и отображает их
+        в текстовом виде в фрейме результатов.
+        """
+        try:
+            from pythonchik.utils.metrics import MetricsCollector
+
+            # Попытка получить метрики из файла или другого источника
+            try:
+                # Пытаемся загрузить метрики из файла сохраненных метрик
+                import json
+                from pathlib import Path
+
+                metrics_file = Path.home() / ".pythonchik" / "metrics.json"
+                if metrics_file.exists():
+                    with open(metrics_file, "r") as f:
+                        metrics = json.load(f)
+                else:
+                    # Если файл не существует, создадим пустые метрики
+                    metrics = {"timings": {}, "counters": {}}
+            except (ImportError, FileNotFoundError, json.JSONDecodeError) as e:
+                # В случае ошибки создаем пустые метрики
+                metrics = {"timings": {}, "counters": {}}
+
+            # Форматируем метрики в текст
+            text = self._format_metrics(metrics)
+
+            # Отображаем метрики
+            self.show_text(text)
+
+        except Exception as e:
+            import traceback
+
+            error_text = f"Ошибка при получении метрик: {str(e)}\n\n{traceback.format_exc()}"
+            self.show_text(error_text)
+
+    def _format_metrics(self, metrics):
+        """Форматирует метрики в текстовый вид.
+
+        Args:
+            metrics: Словарь с метриками от MetricsCollector.
+
+        Returns:
+            Отформатированный текст с метриками.
+        """
+        text = "МЕТРИКИ ПРОИЗВОДИТЕЛЬНОСТИ ПРИЛОЖЕНИЯ\n"
+        text += "====================================\n\n"
+
+        # Секция счетчиков
+        text += "СЧЕТЧИКИ ОПЕРАЦИЙ:\n"
+        text += "-------------------\n"
+        if "counters" in metrics and metrics["counters"]:
+            # Отбираем и сортируем ключевые счетчики
+            counters = metrics["counters"]
+            important_counters = {
+                k: v
+                for k, v in counters.items()
+                if k
+                in [
+                    "tasks_added",
+                    "tasks_completed",
+                    "tasks_interrupted",
+                    "task_errors",
+                    "start_calls",
+                    "add_task_calls",
+                ]
+            }
+
+            if important_counters:
+                # Определяем максимальную длину названия для выравнивания
+                max_name_length = max(len(name) for name in important_counters.keys())
+
+                # Форматируем каждый счетчик
+                for name, value in sorted(important_counters.items()):
+                    text += f"{name.ljust(max_name_length)} : {value}\n"
+            else:
+                text += "Нет данных о счетчиках операций\n"
+        else:
+            text += "Нет данных о счетчиках операций\n"
+
+        text += "\n"
+
+        # Секция времени выполнения
+        text += "ВРЕМЯ ВЫПОЛНЕНИЯ ЗАДАЧ (в секундах):\n"
+        text += "------------------------------------\n"
+        if "timings" in metrics and metrics["timings"]:
+            # Извлекаем данные о времени выполнения
+            timings = metrics["timings"]
+
+            # Фильтруем и сортируем метрики времени
+            task_times = {}
+            for name, metric in timings.items():
+                if name.startswith("task_") or name == "task_execution" or name == "core_uptime":
+                    task_times[name] = metric
+
+            if task_times:
+                # Определяем максимальную длину названия для выравнивания
+                max_name_length = max(len(name) for name in task_times.keys())
+
+                # Заголовок таблицы
+                text += f"{'Операция'.ljust(max_name_length)} | {'Вызовы':<7} | {'Мин (с)':<8} | {'Сред (с)':<8} | {'Макс (с)':<8} | {'Всего (с)':<9}\n"
+                text += "-" * (max_name_length + 51) + "\n"
+
+                # Данные таблицы
+                for name, metric in sorted(task_times.items()):
+                    count = metric.get("count", 0)
+                    min_time = metric.get("min_time", 0)
+                    avg_time = metric.get("avg_time", 0)
+                    max_time = metric.get("max_time", 0)
+                    total_time = metric.get("total_time", 0)
+
+                    # Форматируем до 4 знаков после запятой
+                    text += f"{name.ljust(max_name_length)} | {count:<7} | {min_time:<8.4f} | {avg_time:<8.4f} | {max_time:<8.4f} | {total_time:<9.4f}\n"
+            else:
+                text += "Нет данных о времени выполнения задач\n"
+        else:
+            text += "Нет данных о времени выполнения задач\n"
+
+        # Если есть другие интересные метрики, их можно добавить здесь
+        if "timings" in metrics and "core_uptime" in metrics["timings"]:
+            text += "\n"
+            text += "ОБЩАЯ ИНФОРМАЦИЯ:\n"
+            text += "----------------\n"
+            core_uptime = metrics["timings"]["core_uptime"]
+            if isinstance(core_uptime, dict) and "total_time" in core_uptime:
+                text += f"Общее время работы ядра: {core_uptime['total_time']:.2f} секунд\n"
+
+        return text
