@@ -37,7 +37,12 @@ class SettingsManager:
 
     def _get_default_settings(self) -> Dict[str, Any]:
         """Returns настройки по умолчанию."""
-        return {"theme": "system", "last_directory": str(Path.home()), "auto_save": True, "show_tooltips": True}
+        return {
+            "theme": "system",
+            "last_directory": str(Path.home()),
+            "auto_save": True,
+            "show_tooltips": True,
+        }
 
     def save_settings(self) -> None:
         """Сохраняет текущие настройки в файл."""

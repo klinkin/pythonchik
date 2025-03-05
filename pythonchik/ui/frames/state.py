@@ -1,12 +1,12 @@
-"""Status frame component for displaying application state."""
+"""State frame component for displaying application state."""
 
 import customtkinter as ctk
 
-from pythonchik.core import ApplicationState
+from pythonchik.core.application_state import ApplicationState
 from pythonchik.utils.event_system import Event, EventType
 
 
-class StatusFrame(ctk.CTkFrame):
+class StateFrame(ctk.CTkFrame):
     """Frame for displaying the current application state.
 
     Shows the current ApplicationState with appropriate styling.
@@ -25,8 +25,8 @@ class StatusFrame(ctk.CTkFrame):
         ApplicationState.SHUTTING_DOWN: "#e67e22",  # Orange
     }
 
-    def __init__(self, master, event_bus, **kwargs):
-        """Initialize the status frame.
+    def __init__(self, master, **kwargs):
+        """Initialize the state frame.
 
         Args:
             master: Parent widget
@@ -34,10 +34,8 @@ class StatusFrame(ctk.CTkFrame):
         """
         super().__init__(master, **kwargs)
 
-        self.event_bus = event_bus
-
-        # Create status label
-        self.status_label = ctk.CTkLabel(
+        # Create state label
+        self.state_label = ctk.CTkLabel(
             self,
             text="IDLE",
             font=("Helvetica", 12, "bold"),
@@ -45,28 +43,19 @@ class StatusFrame(ctk.CTkFrame):
             width=100,
             fg_color=self.STATE_COLORS[ApplicationState.IDLE],
         )
-        self.status_label.pack(padx=10, pady=5)
+        self.state_label.pack(padx=10, pady=5)
 
-        # Subscribe to state changes
-        self.event_bus.subscribe(EventType.STATE_CHANGED, self.on_state_changed)
-
-    def on_state_changed(self, event: Event) -> None:
-        """Handle state change events.
-
-        Args:
-            event (Event): The state change event containing new state
-        """
-        new_state = event.data.get("new_state")
-        if new_state:
-            self.update_status(new_state)
-
-    def update_status(self, state: ApplicationState) -> None:
-        """Update the status display with new state.
+    def update_state(self, state: ApplicationState) -> None:
+        """Update the state display with new state.
 
         Args:
             state (ApplicationState): New application state to display
         """
-        # Update label text and color
-        self.status_label.configure(
-            text=state.value.upper(), fg_color=self.STATE_COLORS.get(state, "#95a5a6")
-        )
+
+        def _update():
+            self.state_label.configure(
+                text=state.value.upper(), fg_color=self.STATE_COLORS.get(state, "#95a5a6")
+            )
+
+        # Schedule the update on the main thread
+        self.after(0, _update)

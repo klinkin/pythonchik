@@ -98,8 +98,8 @@ class Event:
     type: EventType
     data: Optional[Dict[str, Any]] = None
     source: Optional[str] = None
-    timestamp: float = None
-    id: str = None
+    timestamp: float = field(default_factory=time)
+    id: str = field(default_factory=lambda: str(__import__('uuid').uuid4()))
 
     priority_key: int = field(init=False, repr=False)
 

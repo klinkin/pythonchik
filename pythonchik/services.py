@@ -1,5 +1,7 @@
 from typing import Any
 
+from pythonchik.utils.event_system import Event, EventBus, EventType
+
 
 def extract_addresses(data: dict[str, Any], event_bus=None) -> list[str]:
     """Извлечь адреса из данных каталога.

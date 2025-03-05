@@ -5,8 +5,8 @@ from unittest.mock import MagicMock, patch
 import customtkinter as ctk
 import pytest
 
+from pythonchik.core.application_core import ApplicationCore
 from pythonchik.ui.app import ModernApp
-from pythonchik.core import ApplicationCore
 
 
 @pytest.fixture
@@ -25,8 +25,9 @@ def mock_core(mock_settings_manager):
 
 @pytest.fixture
 def app(monkeypatch, mock_core):
+    mock_event_bus = MagicMock()
     with patch("pythonchik.ui.app.ApplicationCore", return_value=mock_core):
-        app = ModernApp()
+        app = ModernApp(core=mock_core, event_bus=mock_event_bus)
         yield app
         app.destroy()
 

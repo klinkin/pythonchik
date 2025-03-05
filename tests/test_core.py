@@ -3,7 +3,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from pythonchik.core import ApplicationCore, ApplicationState
+from pythonchik.core.application_core import ApplicationCore
+from pythonchik.core.application_state import ApplicationState
 from pythonchik.utils.error_handler import ErrorContext, ErrorSeverity
 from pythonchik.utils.event_system import Event, EventBus, EventType
 
@@ -48,10 +49,7 @@ def test_add_task_and_completion():
     # calls — список Event, которые пошли в bus.publish(Event(...))
 
     # Проверяем, что есть событие type=TASK_COMPLETED, data={'result':42}
-    found = any(
-        (ev.type == EventType.TASK_COMPLETED and ev.data == {"result": 42})
-        for ev in calls
-    )
+    found = any((ev.type == EventType.TASK_COMPLETED and ev.data == {"result": 42}) for ev in calls)
     assert found, "Не нашли событие TASK_COMPLETED с data={'result': 42}"
 
     core.stop()
@@ -107,10 +105,9 @@ def test_handle_task_synchronous():
     # Смотрим события
     calls = [call_args[0][0] for call_args in mock_publish.call_args_list]
     found_sync = any(
-        (ev.type == EventType.TASK_COMPLETED and ev.data == {"result": "sync_result"})
-        for ev in calls
+        (ev.type == EventType.TASK_COMPLETED and ev.data == {"result": "sync_result"}) for ev in calls
     )
     assert found_sync, "Не нашли TASK_COMPLETED с data={'result': 'sync_result'}"
 
     # Проверим, что state вернулся в IDLE
-    assert core.state == ApplicationState.IDLE
+    assert core.state_manager.state == ApplicationState.IDLE

@@ -41,14 +41,14 @@ class ResultFrame(ctk.CTkFrame):
         self.figure_container.grid_remove()
         self.figure_canvas = None
 
-        # Create progress bar and status label
+        # Create progress bar and state label
         self.progress_bar = ctk.CTkProgressBar(self)
         self.progress_bar.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 5))
         self.progress_bar.grid_remove()
 
-        self.status_label = ctk.CTkLabel(self, text="")
-        self.status_label.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 10))
-        self.status_label.grid_remove()
+        self.progress_label = ctk.CTkLabel(self, text="")
+        self.progress_label.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 10))
+        self.progress_label.grid_remove()
 
     def show_text(self, content: str) -> None:
         """Отображение текстового содержимого.
@@ -133,19 +133,19 @@ class ResultFrame(ctk.CTkFrame):
         self.figure_container.grid_remove()
 
     def update_progress(self, progress: int, message: str = "") -> None:
-        """Update the progress bar and status message.
+        """Update the progress bar and progress message.
 
         Args:
             progress: Progress percentage (0-100)
-            message: Optional status message to display
+            message: Optional message to display
         """
 
         def _update():
             self.progress_bar.grid()
-            self.status_label.grid()
+            self.progress_label.grid()
             self.progress_bar.set(progress / 100)
             if message:
-                self.status_label.configure(text=message)
+                self.progress_label.configure(text=message)
 
         # Schedule the update on the main thread
         self.after(0, _update)
@@ -155,9 +155,9 @@ class ResultFrame(ctk.CTkFrame):
 
         def _reset():
             self.progress_bar.grid_remove()
-            self.status_label.grid_remove()
+            self.progress_label.grid_remove()
             self.progress_bar.set(0)
-            self.status_label.configure(text="")
+            self.progress_label.configure(text="")
 
         # Schedule the reset on the main thread
         self.after(0, _reset)
